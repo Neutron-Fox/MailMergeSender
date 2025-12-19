@@ -1,0 +1,5 @@
+PyQt5>=5.15.0
+pywin32>=300
+pandas>=1.3.0
+openpyxl>=3.0.0
+python-docx>=0.8.11
