@@ -790,7 +790,7 @@ class UniversalSender(QMainWindow):
         self.template_editor.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         self.template_editor.setLineWrapMode(QTextEdit.WidgetWidth)
         template_layout.addWidget(self.template_editor)
-        self.load_default_template()
+        # No default template - user must load from file using the Load button
         self.placeholders_label = QLabel("Detected placeholders will appear here...")
         self.placeholders_label.setWordWrap(True)
         self.placeholders_label.setFixedHeight(50)  
@@ -1518,8 +1518,18 @@ class UniversalSender(QMainWindow):
         if self.tabs.isTabEnabled(index):
             self.tabs.setCurrentIndex(index)
     def on_tab_changed(self, index):
-        """Handle tab switching - tabs are already loaded"""
-        pass  
+        """Handle tab switching - reload data when needed"""
+        # Reload email accounts when switching to Send tab (index 4)
+        if index == 4 and hasattr(self, 'account_combo'):
+            self.load_email_accounts()
+        
+        # Update mapping table when switching to Mapping tab (index 2)
+        if index == 2 and hasattr(self, 'mapping_table'):
+            self.update_mapping_table()
+        
+        # Update format preview when switching to Template Formatting tab (index 3)
+        if index == 3 and hasattr(self, 'format_preview'):
+            self.update_format_preview()  
     def browse_file(self):
         file_filter = "All Files (*.*);;CSV Files (*.csv);;Excel Files (*.xlsx)"
         file_path, _ = QFileDialog.getOpenFileName(
@@ -1544,6 +1554,9 @@ class UniversalSender(QMainWindow):
                 self.populate_data_table()
                 self.next_btn_1.setEnabled(True)
                 self.statusBar().showMessage(f"Imported {len(self.imported_data)} rows")
+                # Instantly update mapping table if placeholders exist
+                if self.placeholders and hasattr(self, 'mapping_table'):
+                    self.update_mapping_table()
                 QMessageBox.information(self, "Success", result['message'])
             else:
                 QMessageBox.critical(self, "Import Error", result['message'])
@@ -1601,6 +1614,8 @@ class UniversalSender(QMainWindow):
         else:
             info_text = f"Showing {total_filtered} filtered rows (Total: {total_imported}) | Checked: {checked_rows} rows"
         self.selection_info_label.setText(info_text)
+        # Instantly update send summary when selection changes
+        self.update_send_summary()
     def filter_table_data(self):
         if not self.imported_data:
             return
@@ -1693,25 +1708,9 @@ class UniversalSender(QMainWindow):
         if hasattr(self, 'format_preview'):
             self.update_format_preview()
     def load_default_template(self):
-        default_template = """Szia <Name>,
-
-Ezúton kérlek erősítsd meg, hogy az IT-tól az alábbi informatikai eszköz vannak nálad:
-
-    <Devices>
-
-Kérlek, válaszolj erre az e-mailre az „Eszközök megegyeznek" szöveggel.
-
-Vagy:
-
-Ha valami eltérés van, kérlek, részletezve küld el válasz e-mailben.
-
-Csatolt elemek: Laptop, Android, Iphone Guide, Policy
-
-Köszönjük az együttműködésedet!
-
-Üdvözlettel,
-IT"""
-        self.template_editor.setPlainText(default_template)
+        """Method kept for backwards compatibility but does nothing.
+        Users must load template from file using the Load button."""
+        pass
     def load_template(self):
         file_path, _ = QFileDialog.getOpenFileName(
             self, "Load Template", "", "Text Files (*.txt);;All Files (*)"
