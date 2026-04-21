@@ -1,7 +1,7 @@
 from PyQt5.QtWidgets import QWidget, QLabel, QProgressBar, QApplication
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
-from theme import var_theme
+from .theme import var_theme
 class LoadingScreen(QWidget):
     """Simple loading screen shown during application startup with pixmap-based layout"""
     def __init__(self, parent=None):

@@ -12,7 +12,7 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
-from theme import var_theme, get_button_style, get_table_style
+from .theme import var_theme, get_button_style, get_table_style
 logger = logging.getLogger(__name__)
 class FileImporter:
     @staticmethod

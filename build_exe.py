@@ -36,11 +36,12 @@ def clean_build_folders():
         os.remove('MailMergeSender.spec')
 def verify_runtime_hook():
     """Verify the runtime hook file exists"""
-    if os.path.exists('pyi_rth_win32com.py'):
-        print("[OK] Runtime hook found: pyi_rth_win32com.py")
+    hook_path = os.path.join('source_code', 'pyi_rth_win32com.py')
+    if os.path.exists(hook_path):
+        print(f"[OK] Runtime hook found: {hook_path}")
         return True
     else:
-        print("[!] Runtime hook not found: pyi_rth_win32com.py")
+        print(f"[!] Runtime hook not found: {hook_path}")
         print("  This file is required for Outlook integration in EXE mode")
         return False
 def build_executable():
@@ -56,10 +57,19 @@ def build_executable():
         '--windowed',                   
         '--name=MailMergeSender',  
         '--icon=NONE',                  
-        '--runtime-hook=pyi_rth_win32com.py',
-        '--hidden-import=theme',
-        '--hidden-import=loading_screen',
-        '--hidden-import=mail_merge_sender',
+        '--runtime-hook=source_code/pyi_rth_win32com.py',
+        '--hidden-import=source_code.theme',
+        '--hidden-import=source_code.loading_screen',
+        '--hidden-import=source_code.mail_merge_sender',
+        '--hidden-import=assets.logger_setup',
+        '--hidden-import=assets.persistence',
+        '--hidden-import=assets.import_service',
+        '--hidden-import=assets.email_service',
+        '--hidden-import=assets.data_manager',
+        '--hidden-import=assets.validators',
+        '--hidden-import=assets.exceptions',
+        '--hidden-import=assets.constants',
+        '--hidden-import=assets.threading_manager',
         '--hidden-import=PyQt5',
         '--hidden-import=PyQt5.QtCore',
         '--hidden-import=PyQt5.QtGui',
@@ -120,7 +130,15 @@ def main():
     print("="*60 + "\n")
     print(f"Python version: {sys.version}")
     print(f"Working directory: {os.getcwd()}\n")
-    required_files = ['main.py', 'mail_merge_sender.py', 'theme.py', 'loading_screen.py']
+    required_files = [
+        'main.py',
+        'source_code/mail_merge_sender.py',
+        'source_code/theme.py',
+        'source_code/loading_screen.py',
+        'source_code/pyi_rth_win32com.py',
+        'assets/constants.py',
+        'assets/logger_setup.py'
+    ]
     missing_files = [f for f in required_files if not os.path.exists(f)]
     if missing_files:
         print(f"[!] Missing required files: {', '.join(missing_files)}")

@@ -1,32 +1,34 @@
 import sys
 import os
 import logging
+
+# Setup path first
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Initialize logging and persistence
+from assets.logger_setup import LoggerSetup
+from assets.persistence import PersistenceManager
+
+LoggerSetup.setup_logging()
+PersistenceManager.ensure_directories()
+
+logger = logging.getLogger(__name__)
+
 if hasattr(sys, 'frozen'):
-    log_dir = os.path.join(os.path.expanduser('~'), 'EmailSender_Logs')
-    os.makedirs(log_dir, exist_ok=True)
-    log_file = os.path.join(log_dir, 'main.log')
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(levelname)s - %(funcName)s: %(message)s',
-        handlers=[
-            logging.FileHandler(log_file, mode='w'),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
-    logging.info(f"Starting as frozen executable - Log file: {log_file}")
+    logger.info("Starting as frozen executable")
 else:
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s: %(message)s')
-    logging.info("Starting in development mode")
+    logger.info("Starting in development mode")
+
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtCore import Qt, QTimer
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 try:
-    from mail_merge_sender import UniversalSender
-    from loading_screen import LoadingScreen
-    from theme import apply_theme
-    logging.info("All modules imported successfully")
+    from source_code.mail_merge_sender import UniversalSender
+    from source_code.loading_screen import LoadingScreen
+    from source_code.theme import apply_theme
+    logger.info("All modules imported successfully")
 except ImportError as e:
-    logging.error(f"CRITICAL: Failed to import modules: {e}")
+    logger.error(f"CRITICAL: Failed to import modules: {e}")
     if hasattr(sys, 'frozen'):
         import traceback
         error_msg = f"Failed to load application modules:\n\n{str(e)}\n\n{traceback.format_exc()}"
@@ -106,17 +108,32 @@ class EmailSenderApp:
 def main():
     print("Starting Universal Email Sender...")
     try:
+        from assets.threading_manager import ThreadingManager
         app = EmailSenderApp()
         exit_code = app.run()
         print(f"Application exited with code: {exit_code}")
+        
+        # Cleanup threads
+        ThreadingManager.cleanup()
+        # Save session on exit
+        from assets.persistence import PersistenceManager
+        logger.info("Saving final session...")
+        
         return exit_code
     except KeyboardInterrupt:
-        print("\\nApplication interrupted by user")
+        print("\nApplication interrupted by user")
+        logger.info("Application interrupted by user")
+        from assets.threading_manager import ThreadingManager
+        ThreadingManager.cleanup()
         return 1
     except Exception as e:
         print(f"Unexpected error: {e}")
         import traceback
         traceback.print_exc()
+        logger.error(f"Unexpected error: {e}")
+        logger.error(traceback.format_exc())
+        from assets.threading_manager import ThreadingManager
+        ThreadingManager.cleanup()
         return 1
 if __name__ == "__main__":
     exit_code = main()
