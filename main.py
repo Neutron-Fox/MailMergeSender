@@ -2,10 +2,8 @@ import sys
 import os
 import logging
 
-# Setup path first
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-# Initialize logging and persistence
 from assets.logger_setup import LoggerSetup
 from assets.persistence import PersistenceManager
 
@@ -43,7 +41,7 @@ class EmailSenderApp:
         self.main_window = None
         self.loading_screen = None
     def setup_application(self):
-        """Setup Qt application with proper settings"""
+        """Setup Qt application"""
         os.environ['QT_AUTO_SCREEN_SCALE_FACTOR'] = '1'
         if hasattr(Qt, 'AA_EnableHighDpiScaling'):
             QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
@@ -54,13 +52,13 @@ class EmailSenderApp:
         self.app.setApplicationVersion("2.0")
         apply_theme(self.app)
     def show_loading_screen(self):
-        """Show loading screen during initialization"""
+        """Show loading screen"""
         self.loading_screen = LoadingScreen()
         self.loading_screen.show()
         self.loading_screen.update_progress(10, "Initializing application...")
         QApplication.processEvents()
     def initialize_application(self):
-        """Initialize application components with loading progress"""
+        """Initialize application with loading progress"""
         try:
             self.loading_screen.update_progress(30, "Creating main window...")
             QApplication.processEvents()
@@ -76,14 +74,14 @@ class EmailSenderApp:
                 self.loading_screen.close()
             sys.exit(1)
     def show_main_window(self):
-        """Show main window and close loading screen"""
+        """Show main window and close splash screen"""
         if self.loading_screen:
             self.loading_screen.close_loading()
         if self.main_window:
             self.main_window.show()
             logging.info("Main window displayed successfully")
     def run(self):
-        """Run the application"""
+        """Run application"""
         try:
             logging.info("Setting up application...")
             self.setup_application()

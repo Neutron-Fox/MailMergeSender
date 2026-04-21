@@ -3,7 +3,7 @@ Data manager service for Universal Email Sender application.
 Handles data state, processing, and placeholder operations.
 """
 import re
-from typing import Dict, Any, List, Tuple, Set
+from typing import Dict, Any, List, Set
 
 from .constants import PLACEHOLDER_PATTERNS
 from .exceptions import (

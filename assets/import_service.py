@@ -4,7 +4,7 @@ Handles multi-format file import with error handling and threading support.
 """
 import os
 import re
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
 from .constants import (

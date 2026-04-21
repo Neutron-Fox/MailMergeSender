@@ -3,7 +3,7 @@ Threading manager for Universal Email Sender application.
 Handles long-running operations on separate threads without freezing UI.
 """
 from PyQt5.QtCore import QThread, pyqtSignal
-from concurrent.futures import ThreadPoolExecutor, Future, TimeoutError
+from concurrent.futures import ThreadPoolExecutor
 from typing import Callable, Any, Optional
 
 from assets.logger_setup import get_logger
@@ -21,14 +21,7 @@ class WorkerThread(QThread):
     error = pyqtSignal(str)  # error message
     
     def __init__(self, operation: Callable, *args, **kwargs):
-        """
-        Initialize worker thread.
-        
-        Args:
-            operation: Callable to execute
-            *args: Positional arguments for operation
-            **kwargs: Keyword arguments for operation
-        """
+        """Initialize worker thread"""
         super().__init__()
         self.operation = operation
         self.args = args
@@ -81,17 +74,7 @@ class ThreadingManager:
     
     @staticmethod
     def run_async(operation: Callable, *args, **kwargs) -> WorkerThread:
-        """
-        Run operation asynchronously in QThread.
-        
-        Args:
-            operation: Callable to execute
-            *args: Arguments for operation
-            **kwargs: Keyword arguments for operation
-            
-        Returns:
-            WorkerThread instance
-        """
+        """Run operation asynchronously in QThread"""
         try:
             thread = WorkerThread(operation, *args, **kwargs)
             ThreadingManager._active_threads.append(thread)
@@ -116,18 +99,7 @@ class ThreadingManager:
     @staticmethod
     def run_with_progress(operation: Callable, progress_callback: Callable = None, 
                          *args, **kwargs) -> WorkerThread:
-        """
-        Run operation with progress callback.
-        
-        Args:
-            operation: Callable to execute
-            progress_callback: Callback(message, current, total) for progress updates
-            *args: Arguments for operation
-            **kwargs: Keyword arguments for operation
-            
-        Returns:
-            WorkerThread instance
-        """
+        """Run operation with progress callback"""
         thread = ThreadingManager.run_async(operation, *args, **kwargs)
         
         if progress_callback:

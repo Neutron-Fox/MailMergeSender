@@ -382,13 +382,3 @@ class EmailService:
                 'failed': len(recipients),
                 'failed_details': [str(e)]
             }
-    
-    @staticmethod
-    def cleanup():
-        """Release Outlook COM object"""
-        try:
-            if EmailService._outlook_instance is not None:
-                EmailService._outlook_instance = None
-                logger.info("Cleaned up Outlook instance")
-        except Exception as e:
-            logger.warning(f"Error during cleanup: {e}")

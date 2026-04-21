@@ -2,8 +2,10 @@ from PyQt5.QtWidgets import QWidget, QLabel, QProgressBar, QApplication
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 from .theme import var_theme
+
+
 class LoadingScreen(QWidget):
-    """Simple loading screen shown during application startup with pixmap-based layout"""
+    """Loading screen with progress bar"""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowFlags(Qt.Window | Qt.WindowStaysOnTopHint)
@@ -78,14 +80,13 @@ class LoadingScreen(QWidget):
         """)
         self.apply_dark_titlebar()
     def center_on_screen(self):
-        """Center the loading screen on the screen"""
-        from PyQt5.QtWidgets import QApplication
+        """Center on screen"""
         screen = QApplication.primaryScreen().geometry()
         x = (screen.width() - self.width()) // 2
         y = (screen.height() - self.height()) // 2
         self.move(x, y)
     def apply_dark_titlebar(self):
-        """Apply dark theme to Windows title bar using DWM API"""
+        """Apply dark theme to Windows title bar"""
         try:
             import ctypes
             from ctypes import wintypes
@@ -98,25 +99,16 @@ class LoadingScreen(QWidget):
                 ctypes.byref(value),
                 ctypes.sizeof(value)
             )
-        except Exception as e:
+        except Exception:
             pass  
     def update_progress(self, value, status_text=""):
-        """Update progress bar and status text"""
+        """Update progress bar"""
         self.progress.setValue(value)
         if status_text:
             self.status_label.setText(status_text)
         QApplication.processEvents()
+    
     def close_loading(self):
-        """Close the loading screen smoothly"""
+        """Close loading screen"""
         self.update_progress(100, "Complete!")
         QTimer.singleShot(200, self.close)
-if __name__ == "__main__":
-    from PyQt5.QtWidgets import QApplication
-    import sys
-    app = QApplication(sys.argv)
-    loading = LoadingScreen()
-    loading.show()
-    for i in range(0, 101, 20):
-        QTimer.singleShot(i * 50, lambda v=i: loading.update_progress(v, f"Loading... {v}%"))
-    QTimer.singleShot(6000, app.quit)
-    sys.exit(app.exec_())
