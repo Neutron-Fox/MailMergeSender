@@ -69,7 +69,7 @@ def build_executable():
         '--hidden-import=assets.validators',
         '--hidden-import=assets.exceptions',
         '--hidden-import=assets.constants',
-        '--hidden-import=assets.threading_manager',
+        '--hidden-import=source_code.threading_manager',
         '--hidden-import=PyQt5',
         '--hidden-import=PyQt5.QtCore',
         '--hidden-import=PyQt5.QtGui',

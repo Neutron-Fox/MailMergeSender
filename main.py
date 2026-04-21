@@ -108,7 +108,7 @@ class EmailSenderApp:
 def main():
     print("Starting Universal Email Sender...")
     try:
-        from assets.threading_manager import ThreadingManager
+        from source_code.threading_manager import ThreadingManager
         app = EmailSenderApp()
         exit_code = app.run()
         print(f"Application exited with code: {exit_code}")
@@ -123,7 +123,7 @@ def main():
     except KeyboardInterrupt:
         print("\nApplication interrupted by user")
         logger.info("Application interrupted by user")
-        from assets.threading_manager import ThreadingManager
+        from source_code.threading_manager import ThreadingManager
         ThreadingManager.cleanup()
         return 1
     except Exception as e:
@@ -132,7 +132,7 @@ def main():
         traceback.print_exc()
         logger.error(f"Unexpected error: {e}")
         logger.error(traceback.format_exc())
-        from assets.threading_manager import ThreadingManager
+        from source_code.threading_manager import ThreadingManager
         ThreadingManager.cleanup()
         return 1
 if __name__ == "__main__":
