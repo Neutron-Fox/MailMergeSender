@@ -21,6 +21,7 @@ class EmailConfig:
     multiple_emails_per_row: bool
     separator_chars: List[str]
     email_template: str
+    send_multiple_together: bool = False  # True: send one email to all addresses, False: send separate emails
     custom_validators: Optional[List[str]] = None
     
     def to_dict(self):
@@ -30,6 +31,7 @@ class EmailConfig:
             'multiple_emails_per_row': self.multiple_emails_per_row,
             'separator_chars': self.separator_chars,
             'email_template': self.email_template,
+            'send_multiple_together': self.send_multiple_together,
             'custom_validators': self.custom_validators or []
         }
     
@@ -41,6 +43,7 @@ class EmailConfig:
             multiple_emails_per_row=data.get('multiple_emails_per_row', False),
             separator_chars=data.get('separator_chars', []),
             email_template=data.get('email_template', r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'),
+            send_multiple_together=data.get('send_multiple_together', False),
             custom_validators=data.get('custom_validators', [])
         )
 
@@ -56,11 +59,12 @@ class EmailConfigurationWizard(QDialog):
         self.data = data
         self.config = None
         self.current_step = 1
-        self.max_steps = 5
+        self.max_steps = 6
         
         # State tracking (persists across step navigation)
         self.selected_email_columns = {}  # Column index -> checked state
         self.multiple_emails_enabled = False
+        self.send_multiple_together = False  # Send one email to all addresses vs separate emails
         self.selected_separators = {}  # Separator -> checked state
         self.template_text = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"  # Email validation regex
         
@@ -91,7 +95,7 @@ class EmailConfigurationWizard(QDialog):
         layout.addWidget(header)
         
         # Step indicator
-        self.step_label = QLabel("Step 1/5: Select Email Columns")
+        self.step_label = QLabel("Step 1/6: Select Email Columns")
         self.step_label.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 11pt;")
         layout.addWidget(self.step_label)
         
@@ -155,7 +159,7 @@ class EmailConfigurationWizard(QDialog):
         """Step 1: Select email columns"""
         self.clear_content()
         self.current_step = 1
-        self.step_label.setText("Step 1/5: Select Email Columns")
+        self.step_label.setText("Step 1/6: Select Email Columns")
         self.back_btn.setEnabled(False)
         self.next_btn.setText("Next →")
         
@@ -209,7 +213,7 @@ class EmailConfigurationWizard(QDialog):
         """Step 2: Multiple emails per row"""
         self.clear_content()
         self.current_step = 2
-        self.step_label.setText("Step 2/5: Multiple Emails Per Row")
+        self.step_label.setText("Step 2/6: Multiple Emails Per Row")
         self.back_btn.setEnabled(True)
         self.next_btn.setText("Next →")
         
@@ -237,14 +241,79 @@ class EmailConfigurationWizard(QDialog):
         self.content_layout.addWidget(group)
     
     def show_step_3(self):
-        """Step 3: Email separators"""
+        """Step 3: Multiple email send mode"""
         # Save state from step 2 before clearing
         if self.multiple_emails_checkbox:
             self.multiple_emails_enabled = self.multiple_emails_checkbox.isChecked()
         
         self.clear_content()
         self.current_step = 3
-        self.step_label.setText("Step 3/5: Email Separators")
+        self.step_label.setText("Step 3/6: Multiple Email Send Mode")
+        self.back_btn.setEnabled(True)
+        self.next_btn.setText("Next →")
+        
+        group = QGroupBox("How should multiple emails be sent?")
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(15)
+        
+        if not self.multiple_emails_enabled:
+            info = QLabel("Since multiple emails per row is disabled, this setting won't be used.")
+            info.setStyleSheet(f"color: {var_theme.colors['text_muted']};")
+            layout.addWidget(info)
+            layout.addStretch()
+        else:
+            info = QLabel(
+                "When a row contains multiple email addresses, you can:\n\n"
+                "• TOGETHER: Send ONE email to all addresses at once (using CC/BCC)\n"
+                "  Best for: Group notifications, announcements\n\n"
+                "• SEPARATE: Send individual emails to each address\n"
+                "  Best for: Personalized mail merge with multiple recipients per row"
+            )
+            info.setStyleSheet(f"color: {var_theme.colors['text_secondary']}; padding: 10px;")
+            layout.addWidget(info)
+            
+            mode_label = QLabel("Select send mode (check one):")
+            layout.addWidget(mode_label)
+            
+            together_radio = QCheckBox("Send TOGETHER (one email to all addresses in the row)")
+            together_radio.setChecked(self.send_multiple_together)
+            together_radio.setStyleSheet("padding: 10px;")
+            
+            separate_radio = QCheckBox("Send SEPARATE (individual email to each address)")
+            separate_radio.setChecked(not self.send_multiple_together)
+            separate_radio.setStyleSheet("padding: 10px;")
+            
+            # Connect to ensure only one is checked
+            def on_together_changed(checked):
+                if checked:
+                    separate_radio.blockSignals(True)
+                    separate_radio.setChecked(False)
+                    separate_radio.blockSignals(False)
+                    self.send_multiple_together = True
+            
+            def on_separate_changed(checked):
+                if checked:
+                    together_radio.blockSignals(True)
+                    together_radio.setChecked(False)
+                    together_radio.blockSignals(False)
+                    self.send_multiple_together = False
+            
+            together_radio.stateChanged.connect(on_together_changed)
+            separate_radio.stateChanged.connect(on_separate_changed)
+            
+            layout.addWidget(together_radio)
+            layout.addWidget(separate_radio)
+            layout.addStretch()
+        
+        group.setLayout(layout)
+        self.content_layout.addWidget(group)
+    
+    def show_step_4(self):
+        """Step 4: Email separators"""
+        self.clear_content()
+        self.current_step = 4
+        self.step_label.setText("Step 4/6: Email Separators")
         self.back_btn.setEnabled(True)
         self.next_btn.setText("Next →")
         
@@ -296,11 +365,11 @@ class EmailConfigurationWizard(QDialog):
         group.setLayout(layout)
         self.content_layout.addWidget(group)
     
-    def show_step_4(self):
-        """Step 4: Email validation template"""
+    def show_step_5(self):
+        """Step 5: Email validation template"""
         self.clear_content()
-        self.current_step = 4
-        self.step_label.setText("Step 4/5: Email Validation Template")
+        self.current_step = 5
+        self.step_label.setText("Step 5/6: Email Validation Template")
         self.back_btn.setEnabled(True)
         self.next_btn.setText("Next →")
         
@@ -333,11 +402,11 @@ class EmailConfigurationWizard(QDialog):
         group.setLayout(layout)
         self.content_layout.addWidget(group)
     
-    def show_step_5(self):
-        """Step 5: Review and test"""
+    def show_step_6(self):
+        """Step 6: Review and test"""
         self.clear_content()
-        self.current_step = 5
-        self.step_label.setText("Step 5/5: Review Configuration")
+        self.current_step = 6
+        self.step_label.setText("Step 6/6: Review Configuration")
         self.back_btn.setEnabled(True)
         self.next_btn.setText("✓ Apply Configuration")
         
@@ -352,6 +421,7 @@ class EmailConfigurationWizard(QDialog):
         summary_text = f"""
 Email Columns:        {self.config.email_columns}
 Multiple Emails:      {'Yes' if self.config.multiple_emails_per_row else 'No'}
+Send Mode:            {'Together (one email to all)' if self.config.send_multiple_together else 'Separate (individual emails)'}
 Separators:           {', '.join(repr(s) for s in self.config.separator_chars) if self.config.separator_chars else 'None'}
 Template:             Email regex validation active
         """
@@ -402,6 +472,7 @@ Template:             Email regex validation active
         return EmailConfig(
             email_columns=email_columns,
             multiple_emails_per_row=multiple_emails,
+            send_multiple_together=self.send_multiple_together,
             separator_chars=separators,
             email_template=template
         )
@@ -454,16 +525,19 @@ Template:             Email regex validation active
             self.show_step_3()
         elif self.current_step == 3:
             # Save state before moving to next step
+            self.show_step_4()
+        elif self.current_step == 4:
+            # Save state before moving to next step
             if self.separator_checkboxes:
                 self.selected_separators = {sep: cb.isChecked() for sep, cb in self.separator_checkboxes.items()}
             if self.multiple_emails_enabled:
                 if not any(cb.isChecked() for cb in self.separator_checkboxes.values()):
                     QMessageBox.warning(self, "No Selection", "Please select at least one separator.")
                     return
-            self.show_step_4()
-        elif self.current_step == 4:
             self.show_step_5()
         elif self.current_step == 5:
+            self.show_step_6()
+        elif self.current_step == 6:
             # Apply configuration and close
             self.config = self.build_configuration()
             self.configuration_complete.emit(self.config)
@@ -479,6 +553,8 @@ Template:             Email regex validation active
             self.show_step_3()
         elif self.current_step == 5:
             self.show_step_4()
+        elif self.current_step == 6:
+            self.show_step_5()
     
     def on_template_mode_changed(self, checkbox):
         """Handle template mode change"""

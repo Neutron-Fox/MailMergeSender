@@ -1407,6 +1407,48 @@ The program will now use these settings for extracting email addresses."""
         send_ready = has_subject and has_template and has_account and recipient_count > 0
         if hasattr(self, 'send_btn'):
             self.send_btn.setEnabled(send_ready)
+    
+    def extract_emails_from_row(self, row_data: list) -> list:
+        """Extract email addresses from a row based on email configuration
+        
+        Args:
+            row_data: List of values from a row
+            
+        Returns:
+            List of email addresses extracted from the row
+        """
+        if not self.email_config:
+            return []
+        
+        emails = []
+        
+        for col_idx in self.email_config.email_columns:
+            if col_idx < len(row_data):
+                cell_content = str(row_data[col_idx]).strip()
+                
+                if not cell_content:
+                    continue
+                
+                if self.email_config.multiple_emails_per_row and self.email_config.separator_chars:
+                    # Split by separators
+                    parts = [cell_content]
+                    for separator in self.email_config.separator_chars:
+                        new_parts = []
+                        for part in parts:
+                            new_parts.extend(part.split(separator))
+                        parts = new_parts
+                    
+                    # Validate each part
+                    for part in parts:
+                        email = part.strip()
+                        if email:
+                            emails.append(email)
+                else:
+                    # Single email per cell
+                    emails.append(cell_content)
+        
+        return emails
+    
     def send_emails(self):
         try:
             subject = self.subject_input.text().strip()
@@ -1446,7 +1488,29 @@ The program will now use these settings for extracting email addresses."""
                         for header_index, header in enumerate(self.headers):
                             if header_index < len(row_data):
                                 recipient[header] = row_data[header_index]
-                        recipients.append(recipient)
+                        
+                        # Handle multiple emails based on configuration
+                        if self.email_config and self.email_config.email_columns:
+                            extracted_emails = self.extract_emails_from_row(row_data)
+                            
+                            if extracted_emails:
+                                if self.email_config.send_multiple_together:
+                                    # Send one email to all addresses (CC/BCC mode)
+                                    recipient['_recipient_emails'] = extracted_emails
+                                    recipients.append(recipient)
+                                else:
+                                    # Send separate emails to each address
+                                    for email in extracted_emails:
+                                        email_recipient = recipient.copy()
+                                        email_recipient['_recipient_email'] = email
+                                        recipients.append(email_recipient)
+                            else:
+                                # No emails extracted, skip this row
+                                logger.warning(f"No emails extracted from row {row_index}")
+                        else:
+                            # No email config, use standard email column
+                            recipients.append(recipient)
+                
                 if not recipients:
                     QMessageBox.warning(self, "No Valid Recipients", 
                                       "No valid recipients found in selected rows.")
