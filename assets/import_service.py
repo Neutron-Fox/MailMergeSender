@@ -3,7 +3,6 @@ File import service for Universal Email Sender application.
 Handles multi-format file import with error handling and threading support.
 """
 import os
-import re
 from typing import Dict, Any, List
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeoutError
 
@@ -11,13 +10,10 @@ from .constants import (
     FILE_ENCODING_DEFAULT,
     FILE_ENCODING_FALLBACK,
     TEXT_FILE_DELIMITERS,
-    TEXT_FILE_DELIMITER_FALLBACK,
-    THREAD_MAX_WORKERS,
-    IMPORT_THREAD_TIMEOUT
+    TEXT_FILE_DELIMITER_FALLBACK
 )
 from .exceptions import (
     FileImportError,
-    FileNotFoundError as CustomFileNotFoundError,
     UnsupportedFileTypeError,
     FileReadError,
     InvalidFileFormatError,

@@ -5,7 +5,6 @@ CRITICAL: This runs BEFORE any application code, setting up win32com for proper
 Outlook integration in EXE mode. This is the single point of COM initialization.
 """
 import sys
-import os
 if hasattr(sys, 'frozen'):
     try:
         import pythoncom

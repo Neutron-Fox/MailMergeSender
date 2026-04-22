@@ -4,13 +4,11 @@ Provides validation for emails, files, paths, and other user inputs.
 """
 import os
 import re
-from pathlib import Path
 
 from .constants import (
     EMAIL_VALIDATION_PATTERN,
     MAX_ATTACHMENT_SIZE,
-    SUPPORTED_FILE_TYPES,
-    TEXT_FILE_DELIMITERS
+    SUPPORTED_FILE_TYPES
 )
 from .exceptions import (
     InvalidEmailError,
@@ -20,6 +18,60 @@ from .exceptions import (
     UnsupportedFileTypeError,
     InvalidDataError
 )
+
+
+class PlaceholderValidator:
+    """Validates placeholder syntax and format"""
+    
+    @staticmethod
+    def validate(placeholder: str) -> bool:
+        """
+        Validate placeholder format.
+        
+        Args:
+            placeholder: Placeholder string (e.g., {NAME})
+            
+        Returns:
+            True if valid format
+        """
+        if not placeholder or not isinstance(placeholder, str):
+            return False
+        
+        placeholder = placeholder.strip()
+        
+        # Must be enclosed in braces and contain at least one letter
+        if not (placeholder.startswith('{') and placeholder.endswith('}')):
+            return False
+        
+        inner = placeholder[1:-1].strip()
+        if not inner or not any(c.isalpha() for c in inner):
+            return False
+        
+        return True
+
+
+class DataValidator:
+    """Validates data structure and content"""
+    
+    @staticmethod
+    def validate_row(row: list, headers: list) -> bool:
+        """
+        Validate that a data row matches headers.
+        
+        Args:
+            row: Data row
+            headers: Column headers
+            
+        Returns:
+            True if valid
+        """
+        if not isinstance(row, list) or not isinstance(headers, list):
+            return False
+        
+        if len(row) != len(headers):
+            return False
+        
+        return True
 
 
 class EmailValidator:

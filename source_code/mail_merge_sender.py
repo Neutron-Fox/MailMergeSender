@@ -1,553 +1,26 @@
 import os
-import sys
 import logging
-import re
-import subprocess
-import time
-from typing import List, Dict, Any
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLabel, QPushButton, QFileDialog, QLineEdit, QMessageBox, QTextEdit, 
-    QGroupBox, QTableWidget, QTableWidgetItem, QTabWidget, QComboBox, QProgressBar
+    QGroupBox, QTableWidget, QTableWidgetItem, QTabWidget, QComboBox, QProgressBar,
+    QScrollArea, QCheckBox
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from .theme import var_theme, get_button_style, get_table_style
+from .email_config_wizard import EmailConfigurationWizard, EmailConfig
+from ..assets.import_service import ImportService
+from ..assets.email_service import EmailService
+from ..assets.data_manager import PlaceholderManager
+
+# Aliases for compatibility
+FileImporter = ImportService
+PlaceholderExtractor = PlaceholderManager
+EmailSender = EmailService
+
 logger = logging.getLogger(__name__)
-class FileImporter:
-    @staticmethod
-    def detect_file_type(file_path: str) -> str:
-        ext = os.path.splitext(file_path.lower())[1]
-        type_map = {
-            '.xlsx': 'excel', '.xls': 'excel',
-            '.docx': 'word', '.doc': 'word',
-            '.csv': 'csv', '.txt': 'txt'
-        }
-        return type_map.get(ext, 'unknown')
-    @staticmethod
-    def read_excel_file(file_path: str) -> Dict[str, Any]:
-        try:
-            import pandas as pd
-            df = pd.read_excel(file_path, engine='openpyxl')
-            return {
-                'headers': list(df.columns),
-                'data': df.values.tolist(),
-                'success': True,
-                'message': f'Excel file loaded successfully. {len(df)} rows found.'
-            }
-        except Exception as e:
-            return {
-                'headers': [], 'data': [], 'success': False,
-                'message': f'Error reading Excel file: {str(e)}'
-            }
-    @staticmethod
-    def read_word_file(file_path: str) -> Dict[str, Any]:
-        try:
-            import docx
-            doc = docx.Document(file_path)
-            tables_data = []
-            for table in doc.tables:
-                table_data = []
-                headers = []
-                for i, row in enumerate(table.rows):
-                    row_data = [cell.text.strip() for cell in row.cells]
-                    if i == 0:
-                        headers = row_data
-                    else:
-                        table_data.append(row_data)
-                if headers and table_data:
-                    tables_data.append({'headers': headers, 'data': table_data})
-            if tables_data:
-                return {
-                    'headers': tables_data[0]['headers'],
-                    'data': tables_data[0]['data'],
-                    'success': True,
-                    'message': f'Word file loaded successfully. {len(tables_data)} tables found.'
-                }
-            else:
-                text_lines = []
-                for paragraph in doc.paragraphs:
-                    if paragraph.text.strip():
-                        text_lines.append([paragraph.text.strip()])
-                return {
-                    'headers': ['Content'],
-                    'data': text_lines,
-                    'success': True,
-                    'message': f'Word file loaded as text. {len(text_lines)} lines found.'
-                }
-        except Exception as e:
-            return {
-                'headers': [], 'data': [], 'success': False,
-                'message': f'Error reading Word file: {str(e)}'
-            }
-    @staticmethod
-    def read_csv_file(file_path: str) -> Dict[str, Any]:
-        try:
-            import pandas as pd
-            df = pd.read_csv(file_path)
-            return {
-                'headers': list(df.columns),
-                'data': df.values.tolist(),
-                'success': True,
-                'message': f'CSV file loaded successfully. {len(df)} rows found.'
-            }
-        except Exception as e:
-            return {
-                'headers': [], 'data': [], 'success': False,
-                'message': f'Error reading CSV file: {str(e)}'
-            }
-    @staticmethod
-    def read_txt_file(file_path: str) -> Dict[str, Any]:
-        try:
-            with open(file_path, 'r', encoding='utf-8') as file:
-                lines = [line.strip() for line in file.readlines() if line.strip()]
-            if not lines:
-                return {
-                    'headers': ['Content'], 'data': [], 'success': True,
-                    'message': 'Text file is empty.'
-                }
-            delimiters = [',', '\t', ';', '|']
-            best_delimiter = ','
-            max_columns = 1
-            for delimiter in delimiters:
-                columns = len(lines[0].split(delimiter))
-                if columns > max_columns:
-                    max_columns = columns
-                    best_delimiter = delimiter
-            if max_columns > 1:
-                headers = [h.strip() for h in lines[0].split(best_delimiter)]
-                data = []
-                for line in lines[1:]:
-                    row_data = [d.strip() for d in line.split(best_delimiter)]
-                    while len(row_data) < len(headers):
-                        row_data.append('')
-                    data.append(row_data[:len(headers)])
-                return {
-                    'headers': headers, 'data': data, 'success': True,
-                    'message': f'Text file loaded. {len(data)} rows with delimiter "{best_delimiter}".'
-                }
-            else:
-                return {
-                    'headers': ['Content'],
-                    'data': [[line] for line in lines],
-                    'success': True,
-                    'message': f'Text file loaded as single column. {len(lines)} lines found.'
-                }
-        except Exception as e:
-            return {
-                'headers': [], 'data': [], 'success': False,
-                'message': f'Error reading text file: {str(e)}'
-            }
-    @staticmethod
-    def import_file(file_path: str) -> Dict[str, Any]:
-        if not os.path.exists(file_path):
-            return {
-                'headers': [], 'data': [], 'success': False,
-                'message': 'File does not exist.'
-            }
-        file_type = FileImporter.detect_file_type(file_path)
-        importers = {
-            'excel': FileImporter.read_excel_file,
-            'word': FileImporter.read_word_file,
-            'csv': FileImporter.read_csv_file,
-            'txt': FileImporter.read_txt_file
-        }
-        importer = importers.get(file_type)
-        if importer:
-            return importer(file_path)
-        else:
-            return {
-                'headers': [], 'data': [], 'success': False,
-                'message': f'Unsupported file type: {file_type}'
-            }
-class PlaceholderExtractor:
-    @staticmethod
-    def extract_placeholders(text: str) -> List[str]:
-        placeholders = set()
-        patterns = [
-            r'\{([^}]+)\}',        
-            r'<([^>]+)>',          
-            r'\[\[([^\]]+)\]\]',   
-            r'<<([^>]+)>>',        
-            r'\(([^)]+)\)',        
-            r'\{\{([^}]+)\}\}',    
-            r'\[([^\]]+)\]',       
-        ]
-        for pattern in patterns:
-            matches = re.findall(pattern, text, re.IGNORECASE)
-            for match in matches:
-                match = match.strip().upper()
-                if match and any(c.isalpha() for c in match):
-                    standardized = '{' + match + '}'
-                    placeholders.add(standardized)
-        return sorted(list(placeholders))
-    @staticmethod
-    def suggest_mappings(placeholders: List[str], headers: List[str]) -> Dict[str, str]:
-        suggestions = {}
-        for placeholder in placeholders:
-            placeholder = placeholder.strip('{}').upper()
-            best_match = None
-            best_score = 0
-            for header in headers:
-                header = header.upper()
-                if placeholder == header:
-                    best_match = header
-                    best_score = 100
-                    break
-                if placeholder in header or header in placeholder:
-                    score = 80
-                    if score > best_score:
-                        best_match = header
-                        best_score = score
-                common_mappings = {
-                    ('NAME', 'FULLNAME', 'FULL_NAME'): ('NAME', 'PERSON', 'USER'),
-                    ('EMAIL', 'MAIL', 'E_MAIL'): ('EMAIL', 'MAIL', '@')
-                }
-                for placeholder_group, header_keywords in common_mappings.items():
-                    if placeholder in placeholder_group:
-                        if any(keyword in header for keyword in header_keywords):
-                            if 60 > best_score:
-                                best_match = header
-                                best_score = 60
-            if best_match:
-                suggestions[placeholder] = best_match
-        return suggestions
-class EmailSender:
-    _outlook_instance = None
-    @staticmethod
-    def is_outlook_running() -> bool:
-        """Check if Outlook process is running"""
-        try:
-            result = subprocess.run(['tasklist', '/FI', 'IMAGENAME eq OUTLOOK.EXE'], 
-                                  capture_output=True, text=True, timeout=5)
-            if 'OUTLOOK.EXE' in result.stdout:
-                logger.info("Found Outlook process running")
-                return True
-        except Exception as e:
-            logger.warning(f"Could not check if Outlook is running: {e}")
-        logger.info("Outlook process not detected")
-        return False
-    @staticmethod
-    def start_outlook():
-        """Try to start Outlook application in background (minimized, no window popup)"""
-        try:
-            logger.info("Starting Microsoft Outlook in background...")
-            outlook_paths = [
-                r"C:\Program Files\Microsoft Office\root\Office16\OUTLOOK.EXE",
-                r"C:\Program Files (x86)\Microsoft Office\root\Office16\OUTLOOK.EXE",
-                r"C:\Program Files\Microsoft Office\Office16\OUTLOOK.EXE",
-                r"C:\Program Files (x86)\Microsoft Office\Office16\OUTLOOK.EXE",
-                r"C:\Program Files\Microsoft Office\root\Office15\OUTLOOK.EXE",
-                r"C:\Program Files (x86)\Microsoft Office\root\Office15\OUTLOOK.EXE",
-            ]
-            for path in outlook_paths:
-                if os.path.exists(path):
-                    logger.info(f"Found Outlook at: {path}")
-                    import subprocess
-                    startupinfo = subprocess.STARTUPINFO()
-                    startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                    startupinfo.wShowWindow = 6  
-                    subprocess.Popen([path], startupinfo=startupinfo)
-                    logger.info("Waiting for Outlook to start in background...")
-                    wait_time = 8 if hasattr(sys, 'frozen') else 5
-                    time.sleep(wait_time)
-                    if EmailSender.is_outlook_running():
-                        logger.info("✓ Outlook started successfully in background")
-                        return True
-                    else:
-                        logger.warning("Outlook process not detected after start attempt")
-                        time.sleep(2)  
-                        return EmailSender.is_outlook_running()
-            try:
-                startupinfo = subprocess.STARTUPINFO()
-                startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
-                startupinfo.wShowWindow = 6  
-                subprocess.Popen(["outlook.exe"], startupinfo=startupinfo)
-                logger.info("Started Outlook via system PATH (minimized)")
-                wait_time = 8 if hasattr(sys, 'frozen') else 5
-                time.sleep(wait_time)
-                return EmailSender.is_outlook_running()
-            except Exception as e:
-                logger.warning(f"Could not start Outlook via PATH: {e}")
-            logger.warning("Could not find or start Outlook")
-            return False
-        except Exception as e:
-            logger.error(f"Error starting Outlook: {e}")
-            return False
-    @staticmethod
-    def get_email_accounts() -> List[Dict[str, Any]]:
-        """Extract email accounts from Microsoft Outlook using pywin32"""
-        accounts = []
-        try:
-            logger.info("Loading Outlook email accounts via pywin32...")
-            logger.info("Connecting to Outlook silently (COM will start it in background if needed)...")
-            try:
-                import win32com.client
-                logger.info("win32com.client imported successfully")
-            except ImportError as e:
-                logger.error(f"CRITICAL: Failed to import win32com.client: {e}")
-                logger.error("Install pywin32: pip install pywin32")
-                QMessageBox.critical(None, "Missing Dependency", 
-                    "pywin32 package is required!\n\nInstall it with: pip install pywin32")
-                return accounts
-            logger.info("Connecting to Outlook Application...")
-            outlook = None
-            if EmailSender._outlook_instance is not None:
-                try:
-                    _ = EmailSender._outlook_instance.Version
-                    logger.info("✓ Reusing existing Outlook instance")
-                    outlook = EmailSender._outlook_instance
-                except:
-                    logger.warning("Cached Outlook instance is invalid, creating new connection")
-                    EmailSender._outlook_instance = None
-            if EmailSender._outlook_instance is None:
-                try:
-                    outlook = win32com.client.Dispatch("Outlook.Application")
-                    _ = outlook.Version
-                    logger.info(f"Successfully connected to Outlook (version {outlook.Version})")
-                    EmailSender._outlook_instance = outlook
-                    logger.info("✓ Outlook instance cached for reuse")
-                except Exception as e:
-                    logger.error(f"Failed to connect to Outlook: {e}")
-                    error_msg = (
-                        f"Could not connect to Microsoft Outlook.\n\n"
-                        f"Error: {str(e)}\n\n"
-                        "Solutions:\n"
-                        "1. Check if Outlook has a security prompt asking for permission - allow it\n"
-                        "2. Wait a few seconds for Outlook to fully start, then try again\n"
-                        "3. Run this program as Administrator (right-click → Run as administrator)\n"
-                        "4. Close ALL Outlook windows and restart this program"
-                    )
-                    QMessageBox.critical(None, "Outlook Connection Error", error_msg)
-                    return accounts
-            QApplication.processEvents()
-            try:
-                namespace = outlook.GetNamespace("MAPI")
-                logger.info("Connected to MAPI namespace")
-            except Exception as e:
-                logger.error(f"Failed to get MAPI namespace: {e}")
-                return accounts
-            try:
-                outlook_accounts = outlook.Session.Accounts
-                account_count = outlook_accounts.Count
-                logger.info(f"Found {account_count} Outlook account(s)")
-                if account_count == 0:
-                    logger.warning("No Outlook accounts configured!")
-                    QMessageBox.warning(None, "No Accounts", 
-                        "No email accounts found in Outlook.\n\n"
-                        "Please configure at least one email account in Outlook.")
-                    return accounts
-            except Exception as e:
-                logger.error(f"Failed to access Outlook accounts: {e}")
-                return accounts
-            for i in range(1, account_count + 1):
-                try:
-                    account = outlook_accounts.Item(i)
-                    account_name = account.DisplayName
-                    try:
-                        email_address = account.SmtpAddress
-                        if email_address and '@' in email_address:
-                            list_index = len(accounts)  
-                            accounts.append({
-                                'email': email_address,
-                                'account_object': account
-                            })
-                            logger.info(f"✓ Outlook Position {i} → List Index[{list_index}]: {email_address} (Name: {account_name})")
-                        else:
-                            logger.warning(f"✗ Account {i}: No valid SMTP address")
-                    except Exception as e:
-                        logger.warning(f"✗ Account {i}: Error: {e}")
-                    QApplication.processEvents()
-                except Exception as e:
-                    logger.warning(f"Error processing account {i}: {e}")
-        except Exception as e:
-            logger.error(f"Critical error loading email accounts: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-            QMessageBox.critical(None, "Error", 
-                f"Error loading email accounts:\n\n{str(e)}\n\n"
-                "Please ensure:\n"
-                "1. Microsoft Outlook is installed\n"
-                "2. pywin32 is installed (pip install pywin32)\n"
-                "3. Outlook has configured email accounts")
-        if len(accounts) == 0:
-            logger.warning("No email accounts loaded!")
-            print(f"\n⚠ WARNING: No email accounts found in Outlook!\n")
-        else:
-            logger.info(f"Successfully loaded {len(accounts)} email account(s)")
-            print(f"\n✓ Successfully loaded {len(accounts)} email account(s):")
-            for i, acc in enumerate(accounts, 1):
-                print(f"  {i}. {acc['email']}")
-            print()
-        return accounts
-    @staticmethod
-    def send_emails(recipients: List[Dict], subject: str, template: str, 
-                   account: Dict, attachments: List[str] = None) -> Dict[str, Any]:
-        """Send emails using Microsoft Outlook via pywin32"""
-        try:
-            import win32com.client
-            sender_email = account.get('email', None)
-            if not sender_email:
-                return {
-                    'success': False,
-                    'message': 'No valid account selected.',
-                    'sent': 0,
-                    'failed': len(recipients)
-                }
-            if EmailSender._outlook_instance is not None:
-                try:
-                    _ = EmailSender._outlook_instance.Version
-                    outlook = EmailSender._outlook_instance
-                    logger.info("✓ Reusing cached Outlook instance for sending")
-                except:
-                    logger.warning("Cached Outlook instance is invalid, will reconnect")
-                    EmailSender._outlook_instance = None
-            if EmailSender._outlook_instance is None:
-                logger.info("No cached instance - connecting to Outlook")
-                if not EmailSender.is_outlook_running():
-                    logger.error("Outlook is not running - this should not happen at send time")
-                    return {
-                        'success': False,
-                        'message': 'Outlook is not running. Please restart the application.',
-                        'sent': 0,
-                        'failed': len(recipients)
-                    }
-                try:
-                    logger.info("Connecting to existing Outlook instance...")
-                    outlook = win32com.client.Dispatch("Outlook.Application")
-                    _ = outlook.Version
-                    EmailSender._outlook_instance = outlook
-                    logger.info("✓ Connected and cached Outlook instance")
-                except Exception as e:
-                    logger.error(f"Failed to connect to Outlook: {e}")
-                    return {
-                        'success': False,
-                        'message': f'Cannot connect to Outlook: {str(e)}',
-                        'sent': 0,
-                        'failed': len(recipients)
-                    }
-            account_object = None
-            try:
-                outlook_accounts = outlook.Session.Accounts
-                logger.info(f"Searching for account: {sender_email}")
-                for i in range(1, outlook_accounts.Count + 1):
-                    acc = outlook_accounts.Item(i)
-                    acc_email = acc.SmtpAddress
-                    logger.info(f"  Checking account {i}: {acc_email}")
-                    if acc_email.lower() == sender_email.lower():
-                        account_object = acc
-                        logger.info(f"✓ FOUND MATCHING ACCOUNT: {acc_email}")
-                        logger.info(f"  Account DisplayName: {acc.DisplayName}")
-                        break
-                if not account_object:
-                    logger.error(f"✗ ACCOUNT NOT FOUND: {sender_email}")
-                    return {
-                        'success': False,
-                        'message': f'Could not find account {sender_email} in Outlook session',
-                        'sent': 0,
-                        'failed': len(recipients)
-                    }
-            except Exception as e:
-                logger.error(f"Error finding account: {e}")
-                return {
-                    'success': False,
-                    'message': f'Error accessing Outlook accounts: {str(e)}',
-                    'sent': 0,
-                    'failed': len(recipients)
-                }
-            sent_count = 0
-            failed_count = 0
-            failed_recipients = []
-            for i, recipient_data in enumerate(recipients, 1):
-                try:
-                    recipient_email = None
-                    for field in ['EMAIL', 'Email', 'email', 'E-mail', 'E-Mail', 'Mail', 'MAIL']:
-                        if field in recipient_data and recipient_data[field]:
-                            recipient_email = str(recipient_data[field]).strip()
-                            break
-                    if not recipient_email or '@' not in recipient_email:
-                        failed_count += 1
-                        failed_recipients.append(f"Recipient {i}: No valid email")
-                        continue
-                    mail_item = outlook.CreateItem(0)  
-                    mail_item.SendUsingAccount = account_object
-                    try:
-                        mail_item.SentOnBehalfOfName = sender_email
-                        logger.info(f"Email {i}: SentOnBehalfOfName set to: {sender_email}")
-                    except Exception as e:
-                        logger.warning(f"Email {i}: Could not set SentOnBehalfOfName: {e}")
-                    logger.info(f"Email {i}: Account set immediately after creation: {sender_email}")
-                    mail_item.To = recipient_email
-                    if '_processed_subject' in recipient_data:
-                        mail_item.Subject = recipient_data['_processed_subject']
-                    else:
-                        mail_item.Subject = subject
-                    if '_processed_template' in recipient_data:
-                        body_text = recipient_data['_processed_template']
-                    else:
-                        body_text = template
-                    mail_item.HTMLBody = body_text.replace('\n', '<br>')
-                    if attachments:
-                        for att_path in attachments:
-                            if os.path.exists(att_path):
-                                try:
-                                    mail_item.Attachments.Add(att_path)
-                                except:
-                                    pass
-                    logger.info(f"Email {i}: Setting sender account to: {sender_email}")
-                    mail_item.SendUsingAccount = account_object
-                    mail_item.Save()
-                    logger.info(f"Email {i}: Email saved")
-                    mail_item.SendUsingAccount = account_object
-                    time.sleep(0.05)
-                    mail_item.SendUsingAccount = account_object
-                    try:
-                        test_sender = mail_item.SendUsingAccount
-                        if test_sender:
-                            logger.info(f"Email {i}: Final sender check: {test_sender.SmtpAddress}")
-                        else:
-                            logger.warning(f"Email {i}: SendUsingAccount returned None (Outlook quirk)")
-                            mail_item.SendUsingAccount = account_object
-                    except Exception as e:
-                        logger.warning(f"Email {i}: Could not verify sender: {e}")
-                    mail_item.Send()
-                    logger.info(f"Email {i}: ✓ Sent from: {sender_email}")
-                    time.sleep(0.1)
-                    sent_count += 1
-                except Exception as e:
-                    failed_count += 1
-                    error_msg = f"Recipient {i}: {str(e)}"
-                    failed_recipients.append(error_msg)
-            return {
-                'success': failed_count == 0,
-                'message': f'Sent {sent_count} emails' + (f', {failed_count} failed' if failed_count > 0 else ''),
-                'sent': sent_count,
-                'failed': failed_count,
-                'failed_details': failed_recipients
-            }
-        except Exception as e:
-            return {
-                'success': False,
-                'message': f'Critical error: {str(e)}',
-                'sent': 0,
-                'failed': len(recipients)
-            }
-    @staticmethod
-    def _replace_placeholders(text: str, data: Dict[str, Any]) -> str:
-        result = text
-        for key, value in data.items():
-            placeholders = [
-                f'{{{key.upper()}}}',
-                f'<{key.upper()}>',
-                f'[{key.upper()}]',
-                f'{{{{{key.upper()}}}}}',
-                f'<<{key.upper()}>>',
-                f'[[{key.upper()}]]'
-            ]
-            str_value = str(value) if value is not None else ''
-            for placeholder in placeholders:
-                result = result.replace(placeholder, str_value)
-        return result
+
 class UniversalSender(QMainWindow):
     def __init__(self, loading_screen=None):
         super().__init__()
@@ -567,6 +40,7 @@ class UniversalSender(QMainWindow):
         self.column_mapping = {}
         self.email_accounts = []
         self.template_formatting = {}  
+        self.email_config = None  # Email configuration from wizard
         self.bullet_styles = {
             "Dash": "-",
             "Bullet": "•",
@@ -861,7 +335,6 @@ class UniversalSender(QMainWindow):
         layout.addLayout(nav_layout)
         return widget
     def create_template_formatting_tab(self) -> QWidget:
-        from PyQt5.QtWidgets import QScrollArea, QCheckBox
         widget = QWidget()
         main_layout = QVBoxLayout(widget)
         main_layout.setSpacing(6)
@@ -1558,11 +1031,41 @@ class UniversalSender(QMainWindow):
                 if self.placeholders and hasattr(self, 'mapping_table'):
                     self.update_mapping_table()
                 QMessageBox.information(self, "Success", result['message'])
+                
+                # Show email configuration wizard
+                self.show_email_config_wizard()
             else:
                 QMessageBox.critical(self, "Import Error", result['message'])
         except Exception as e:
             logger.error(f"Critical error during import: {e}")
             QMessageBox.critical(self, "Critical Error", f"An unexpected error occurred: {str(e)}")
+    
+    def show_email_config_wizard(self):
+        """Show the email configuration wizard dialog"""
+        try:
+            wizard = EmailConfigurationWizard(self.headers, self.imported_data, parent=self)
+            wizard.configuration_complete.connect(self.on_email_config_complete)
+            wizard.exec_()
+        except Exception as e:
+            logger.error(f"Error showing email configuration wizard: {e}")
+            QMessageBox.warning(self, "Wizard Error", f"Could not open configuration wizard: {str(e)}")
+    
+    def on_email_config_complete(self, config: EmailConfig):
+        """Handle email configuration completion"""
+        self.email_config = config
+        logger.info(f"Email configuration saved: columns={config.email_columns}, multiple={config.multiple_emails_per_row}")
+        
+        # Show success message with configuration details
+        msg = f"""Email Configuration Saved!
+
+Email Columns: {config.email_columns}
+Multiple Emails per Row: {'Yes' if config.multiple_emails_per_row else 'No'}
+Separators: {', '.join(repr(s) for s in config.separator_chars) if config.separator_chars else 'None'}
+
+The program will now use these settings for extracting email addresses."""
+        
+        QMessageBox.information(self, "Configuration Complete", msg)
+    
     def populate_data_table(self):
         if not self.imported_data or not self.headers:
             return
@@ -2042,15 +1545,9 @@ class UniversalSender(QMainWindow):
                 if file_path not in self.attachments:
                     self.attachments.append(file_path)
             self.update_attachments_display()
-            for file_path in file_paths:
-                if file_path not in self.attachments:
-                    self.attachments.append(file_path)
-            self.update_attachments_display()
     def remove_attachment(self):
         current_row = self.attachments_table.currentRow()
         if current_row >= 0 and current_row < len(self.attachments):
-            self.attachments.pop(current_row)
-            self.update_attachments_display()
             self.attachments.pop(current_row)
             self.update_attachments_display()
     def clear_attachments(self):
@@ -2099,7 +1596,6 @@ class UniversalSender(QMainWindow):
         """Apply dark theme to Windows title bar using DWM API"""
         try:
             import ctypes
-            from ctypes import wintypes
             hwnd = int(self.winId())
             DWMWA_USE_IMMERSIVE_DARK_MODE = 20
             value = ctypes.c_int(1)
@@ -2109,7 +1605,7 @@ class UniversalSender(QMainWindow):
                 ctypes.byref(value),
                 ctypes.sizeof(value)
             )
-        except Exception as e:
+        except Exception:
             pass  
 if __name__ == "__main__":
     app = QApplication(sys.argv)

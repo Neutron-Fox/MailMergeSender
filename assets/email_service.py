@@ -7,8 +7,6 @@ import sys
 import subprocess
 import time
 from typing import Dict, Any, List, Optional
-from concurrent.futures import ThreadPoolExecutor
-
 from .constants import (
     OUTLOOK_PROCESS_NAME,
     OUTLOOK_PROCESS_TIMEOUT,
@@ -16,20 +14,16 @@ from .constants import (
     OUTLOOK_STARTUP_WAIT_FROZEN,
     OUTLOOK_STARTUP_WAIT_DEV,
     OUTLOOK_STARTUP_MIN_WAIT,
-    EMAIL_SEND_DELAY,
-    THREAD_MAX_WORKERS,
-    SEND_THREAD_TIMEOUT
+    EMAIL_SEND_DELAY
 )
 from .exceptions import (
     OutlookError,
-    OutlookNotRunningError,
     OutlookConnectionError,
     OutlookAccountError,
     NoOutlookAccountsError,
     EmailSendError,
     InvalidRecipientError,
-    MissingDependencyError,
-    OperationTimeoutError
+    MissingDependencyError
 )
 from .validators import EmailValidator
 from .logger_setup import get_logger

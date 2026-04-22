@@ -9,7 +9,7 @@ import shutil
 def check_pyinstaller():
     """Check if PyInstaller is installed"""
     try:
-        import PyInstaller
+        __import__('PyInstaller')
         print("[OK] PyInstaller is installed")
         return True
     except ImportError:

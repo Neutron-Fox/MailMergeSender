@@ -89,7 +89,6 @@ class LoadingScreen(QWidget):
         """Apply dark theme to Windows title bar"""
         try:
             import ctypes
-            from ctypes import wintypes
             hwnd = int(self.winId())
             DWMWA_USE_IMMERSIVE_DARK_MODE = 20
             value = ctypes.c_int(1)

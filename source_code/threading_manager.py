@@ -4,9 +4,9 @@ Handles long-running operations on separate threads without freezing UI.
 """
 from PyQt5.QtCore import QThread, pyqtSignal
 from concurrent.futures import ThreadPoolExecutor
-from typing import Callable, Any, Optional
+from typing import Callable, Any
 
-from assets.logger_setup import get_logger
+from ..assets.logger_setup import get_logger
 
 logger = get_logger(__name__)
 
