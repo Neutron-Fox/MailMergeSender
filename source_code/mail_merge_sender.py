@@ -1,4 +1,5 @@
 import os
+import sys
 import logging
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
@@ -10,9 +11,9 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from .theme import var_theme, get_button_style, get_table_style
 from .email_config_wizard import EmailConfigurationWizard, EmailConfig
-from ..assets.import_service import ImportService
-from ..assets.email_service import EmailService
-from ..assets.data_manager import PlaceholderManager
+from assets.import_service import ImportService
+from assets.email_service import EmailService
+from assets.data_manager import PlaceholderManager
 
 # Aliases for compatibility
 FileImporter = ImportService

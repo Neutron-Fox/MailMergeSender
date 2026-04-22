@@ -58,6 +58,18 @@ class EmailConfigurationWizard(QDialog):
         self.current_step = 1
         self.max_steps = 5
         
+        # State tracking (persists across step navigation)
+        self.selected_email_columns = {}  # Column index -> checked state
+        self.multiple_emails_enabled = False
+        self.selected_separators = {}  # Separator -> checked state
+        self.template_text = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"  # Email validation regex
+        
+        # Widget references for current step
+        self.column_checkboxes = {}
+        self.separator_checkboxes = {}
+        self.multiple_emails_checkbox = None
+        self.template_input = None
+        
         self.setWindowTitle("Email Extraction Configuration Wizard")
         self.setGeometry(150, 150, 900, 700)
         self.setMinimumWidth(900)
@@ -119,10 +131,25 @@ class EmailConfigurationWizard(QDialog):
         
     def clear_content(self):
         """Clear content area"""
+        # Save widget states before deleting
+        if self.column_checkboxes:
+            self.selected_email_columns = {col: cb.isChecked() for col, cb in self.column_checkboxes.items()}
+        if self.separator_checkboxes:
+            self.selected_separators = {sep: cb.isChecked() for sep, cb in self.separator_checkboxes.items()}
+        if self.template_input:
+            self.template_text = self.template_input.text()
+        
+        # Clear and delete widgets
         while self.content_layout.count():
             item = self.content_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        
+        # Clear widget references
+        self.column_checkboxes = {}
+        self.separator_checkboxes = {}
+        self.multiple_emails_checkbox = None
+        self.template_input = None
     
     def show_step_1(self):
         """Step 1: Select email columns"""
@@ -166,6 +193,9 @@ class EmailConfigurationWizard(QDialog):
         
         for col_idx, header in enumerate(self.headers):
             checkbox = QCheckBox(f"Column {col_idx}: {header}")
+            # Restore previous state if available
+            if col_idx in self.selected_email_columns:
+                checkbox.setChecked(self.selected_email_columns[col_idx])
             self.column_checkboxes[col_idx] = checkbox
             columns_layout.addWidget(checkbox)
         
@@ -198,6 +228,7 @@ class EmailConfigurationWizard(QDialog):
         layout.addWidget(info)
         
         self.multiple_emails_checkbox = QCheckBox("Multiple emails can be in one cell")
+        self.multiple_emails_checkbox.setChecked(self.multiple_emails_enabled)
         self.multiple_emails_checkbox.setStyleSheet("padding: 10px;")
         layout.addWidget(self.multiple_emails_checkbox)
         
@@ -207,6 +238,10 @@ class EmailConfigurationWizard(QDialog):
     
     def show_step_3(self):
         """Step 3: Email separators"""
+        # Save state from step 2 before clearing
+        if self.multiple_emails_checkbox:
+            self.multiple_emails_enabled = self.multiple_emails_checkbox.isChecked()
+        
         self.clear_content()
         self.current_step = 3
         self.step_label.setText("Step 3/5: Email Separators")
@@ -218,7 +253,7 @@ class EmailConfigurationWizard(QDialog):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
         
-        if not self.multiple_emails_checkbox.isChecked():
+        if not self.multiple_emails_enabled:
             info = QLabel("Since multiple emails per row is disabled, separators won't be used.")
             info.setStyleSheet(f"color: {var_theme.colors['text_muted']};")
             layout.addWidget(info)
@@ -243,9 +278,15 @@ class EmailConfigurationWizard(QDialog):
                 ' ': QCheckBox("Space ( )")
             }
             
-            # Pre-check common ones
-            self.separator_checkboxes[';'].setChecked(True)
-            self.separator_checkboxes[','].setChecked(True)
+            # Restore previous state or use defaults
+            if self.selected_separators:
+                # Restore from previous selections
+                for sep, checkbox in self.separator_checkboxes.items():
+                    checkbox.setChecked(self.selected_separators.get(sep, False))
+            else:
+                # Pre-check common ones on first visit
+                self.separator_checkboxes[';'].setChecked(True)
+                self.separator_checkboxes[','].setChecked(True)
             
             for checkbox in self.separator_checkboxes.values():
                 layout.addWidget(checkbox)
@@ -283,7 +324,7 @@ class EmailConfigurationWizard(QDialog):
         
         template_label = QLabel("Email regex pattern:")
         self.template_input = QLineEdit()
-        self.template_input.setText(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
+        self.template_input.setText(self.template_text)  # Restore saved template
         self.template_input.setReadOnly(True)
         layout.addWidget(template_label)
         layout.addWidget(self.template_input)
@@ -317,7 +358,7 @@ Template:             Email regex validation active
         
         summary_label = QLabel("Configuration Summary:")
         summary_display = QLabel(summary_text)
-        summary_display.setStyleSheet(f"background-color: {var_theme.colors['bg_secondary']}; padding: 12px; border-radius: 4px; font-family: monospace;")
+        summary_display.setStyleSheet(f"background-color: {var_theme.colors['secondary_bg']}; padding: 12px; border-radius: 4px; font-family: monospace;")
         layout.addWidget(summary_label)
         layout.addWidget(summary_display)
         
@@ -335,7 +376,7 @@ Template:             Email regex validation active
             result_text = "⚠ No valid emails found. Please review your configuration."
         
         result_display = QLabel(result_text)
-        result_display.setStyleSheet(f"background-color: {var_theme.colors['bg_secondary']}; padding: 12px; border-radius: 4px;")
+        result_display.setStyleSheet(f"background-color: {var_theme.colors['secondary_bg']}; padding: 12px; border-radius: 4px;")
         layout.addWidget(result_display)
         
         layout.addStretch()
@@ -344,19 +385,19 @@ Template:             Email regex validation active
     
     def build_configuration(self) -> EmailConfig:
         """Build EmailConfig from current step selections"""
-        # Get selected columns
-        email_columns = [col for col, cb in self.column_checkboxes.items() if cb.isChecked()]
+        # Get selected columns from saved state
+        email_columns = [col for col, checked in self.selected_email_columns.items() if checked]
         
         # Get multiple emails setting
-        multiple_emails = self.multiple_emails_checkbox.isChecked()
+        multiple_emails = self.multiple_emails_enabled
         
-        # Get separators
+        # Get separators from saved state
         separators = []
-        if hasattr(self, 'separator_checkboxes') and multiple_emails:
-            separators = [sep for sep, cb in self.separator_checkboxes.items() if cb.isChecked()]
+        if multiple_emails:
+            separators = [sep for sep, checked in self.selected_separators.items() if checked]
         
-        # Get template
-        template = self.template_input.text()
+        # Get template from saved state (not from widget which may be deleted)
+        template = self.template_text
         
         return EmailConfig(
             email_columns=email_columns,
@@ -403,11 +444,19 @@ Template:             Email regex validation active
             if not any(cb.isChecked() for cb in self.column_checkboxes.values()):
                 QMessageBox.warning(self, "No Selection", "Please select at least one column containing emails.")
                 return
+            # Save state before moving to next step
+            self.selected_email_columns = {col: cb.isChecked() for col, cb in self.column_checkboxes.items()}
             self.show_step_2()
         elif self.current_step == 2:
+            # Save state before moving to next step
+            if self.multiple_emails_checkbox:
+                self.multiple_emails_enabled = self.multiple_emails_checkbox.isChecked()
             self.show_step_3()
         elif self.current_step == 3:
-            if self.multiple_emails_checkbox.isChecked():
+            # Save state before moving to next step
+            if self.separator_checkboxes:
+                self.selected_separators = {sep: cb.isChecked() for sep, cb in self.separator_checkboxes.items()}
+            if self.multiple_emails_enabled:
                 if not any(cb.isChecked() for cb in self.separator_checkboxes.values()):
                     QMessageBox.warning(self, "No Selection", "Please select at least one separator.")
                     return
