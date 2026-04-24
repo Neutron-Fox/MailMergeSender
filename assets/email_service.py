@@ -35,6 +35,116 @@ class EmailService:
     """Handles email sending via Microsoft Outlook"""
     
     _outlook_instance = None
+
+    @staticmethod
+    def _resolve_send_account(outlook: Any, sender_email: str, preferred_account: Any = None) -> Any:
+        """Resolve the exact Outlook account object for the selected sender email.
+
+        This avoids stale COM account objects and ensures SendUsingAccount points to
+        the account currently selected in the UI dropdown.
+        """
+        normalized_email = (sender_email or "").strip().lower()
+        if not normalized_email:
+            raise EmailSendError("Selected sender email is empty")
+
+        # First try preferred account object from UI list if it still belongs to this session.
+        if preferred_account is not None:
+            try:
+                preferred_smtp = str(preferred_account.SmtpAddress).strip().lower()
+                if preferred_smtp == normalized_email:
+                    return preferred_account
+            except Exception:
+                logger.warning("Preferred account object is stale; resolving by SMTP address")
+
+        # Resolve account object by SMTP from current Outlook session.
+        try:
+            session_accounts = outlook.Session.Accounts
+            for i in range(1, session_accounts.Count + 1):
+                account_obj = session_accounts.Item(i)
+                smtp = str(account_obj.SmtpAddress).strip().lower()
+                if smtp == normalized_email:
+                    return account_obj
+        except Exception as e:
+            raise EmailSendError(f"Could not resolve selected account '{sender_email}': {e}")
+
+        raise EmailSendError(f"Selected account not found in Outlook session: {sender_email}")
+
+    @staticmethod
+    def _create_mail_item_for_account(outlook: Any, account_object: Any) -> Any:
+        """Create a mail item scoped to the selected account store when possible.
+
+        Outlook can fallback to the default account when creating a generic item.
+        Creating the draft inside the selected account store improves sender fidelity.
+        """
+        # olFolderDrafts = 16
+        try:
+            drafts_folder = account_object.DeliveryStore.GetDefaultFolder(16)
+            if drafts_folder is not None:
+                mail_item = drafts_folder.Items.Add("IPM.Note")
+                logger.info("Created mail item in selected account Drafts store")
+                return mail_item
+        except Exception as e:
+            logger.warning(f"Could not create account-scoped draft item: {e}")
+
+        logger.warning("Falling back to generic CreateItem(0)")
+        return outlook.CreateItem(0)
+
+    @staticmethod
+    def resolve_sender_email(account: Dict[str, Any]) -> str:
+        """Resolve and validate the actual sender account address for the provided account selection."""
+        try:
+            import win32com.client
+
+            sender_email = (account or {}).get('email', '')
+            if not sender_email:
+                raise EmailSendError("No selected sender email")
+
+            outlook = EmailService._outlook_instance
+            if outlook is None:
+                outlook = win32com.client.Dispatch("Outlook.Application")
+                EmailService._outlook_instance = outlook
+
+            preferred_account_object = account.get('account_object')
+            account_object = EmailService._resolve_send_account(outlook, sender_email, preferred_account_object)
+            resolved_email = str(account_object.SmtpAddress).strip()
+            if not resolved_email:
+                raise EmailSendError("Resolved sender account has no SMTP address")
+            return resolved_email
+        except Exception as e:
+            if isinstance(e, EmailSendError):
+                raise
+            raise EmailSendError(f"Could not resolve sender account: {e}")
+
+    @staticmethod
+    def _apply_sender_to_mail_item(mail_item: Any, account_object: Any, sender_email: str) -> None:
+        """Apply sender identity using both supported Outlook mechanisms.
+
+        - SendUsingAccount: preferred for normal account sending.
+        - SentOnBehalfOfName: explicit From identity when supported/required.
+        """
+        mail_item.SendUsingAccount = account_object
+
+        # Some Outlook setups require explicit From identity.
+        # If this fails, keep SendUsingAccount as the primary mechanism.
+        try:
+            mail_item.SentOnBehalfOfName = sender_email
+            logger.info(f"Set SentOnBehalfOfName to: {sender_email}")
+        except Exception as e:
+            logger.warning(f"Could not set SentOnBehalfOfName: {e}")
+
+        # Best-effort verification of account binding.
+        try:
+            bound_account = mail_item.SendUsingAccount
+            bound_smtp = str(bound_account.SmtpAddress).strip().lower() if bound_account else ""
+            if bound_smtp and bound_smtp != sender_email.strip().lower():
+                raise EmailSendError(
+                    f"Sender binding mismatch. Selected={sender_email}, Bound={bound_smtp}. "
+                    "Outlook may be forcing a different account."
+                )
+        except EmailSendError:
+            raise
+        except Exception as e:
+            logger.warning(f"Could not verify bound sender account: {e}")
     
     @staticmethod
     def check_outlook_running() -> bool:
@@ -272,10 +382,12 @@ class EmailService:
                 logger.error(f"Failed to get Outlook instance: {e}")
                 raise EmailSendError(f"Outlook connection failed: {e}")
             
-            # Find account object
-            account_object = account.get('account_object')
-            if not account_object:
-                raise EmailSendError("Account object missing")
+            # Resolve a fresh account object from current Outlook session using the selected email.
+            preferred_account_object = account.get('account_object')
+            account_object = EmailService._resolve_send_account(outlook, sender_email, preferred_account_object)
+            
+            logger.info(f"Using account: {sender_email}")
+            logger.info(f"Account object type: {type(account_object)}")
             
             sent_count = 0
             failed_count = 0
@@ -286,37 +398,71 @@ class EmailService:
                     if callback:
                         callback(i, len(recipients))
                     
-                    # Extract email
-                    recipient_email = None
-                    for field in ['EMAIL', 'Email', 'email', 'E-mail', 'Mail', 'MAIL']:
-                        if field in recipient_data:
-                            candidate = str(recipient_data[field]).strip()
-                            if candidate and '@' in candidate:
-                                recipient_email = candidate
-                                break
-                    
-                    if not recipient_email:
+                    # Extract recipient emails. Prefer explicit fields prepared by UI logic.
+                    raw_candidates = []
+                    if '_recipient_emails' in recipient_data:
+                        raw_value = recipient_data.get('_recipient_emails', [])
+                        if isinstance(raw_value, (list, tuple, set)):
+                            raw_candidates.extend(str(v).strip() for v in raw_value if str(v).strip())
+                        else:
+                            raw_text = str(raw_value).strip()
+                            if raw_text:
+                                raw_candidates.append(raw_text)
+                    elif '_recipient_email' in recipient_data:
+                        raw_text = str(recipient_data.get('_recipient_email', '')).strip()
+                        if raw_text:
+                            raw_candidates.append(raw_text)
+                    else:
+                        for field in ['EMAIL', 'Email', 'email', 'E-mail', 'Mail', 'MAIL']:
+                            if field in recipient_data:
+                                candidate = str(recipient_data[field]).strip()
+                                if candidate and '@' in candidate:
+                                    raw_candidates.append(candidate)
+                                    break
+
+                    # Split any combined values and validate each email.
+                    recipient_emails = []
+                    for candidate in raw_candidates:
+                        parts = [candidate]
+                        for separator in [';', ',', '\n', '\r']:
+                            new_parts = []
+                            for part in parts:
+                                new_parts.extend(part.split(separator))
+                            parts = new_parts
+                        for part in parts:
+                            email = part.strip()
+                            if email and '@' in email and email not in recipient_emails:
+                                recipient_emails.append(email)
+
+                    if not recipient_emails:
                         raise InvalidRecipientError(str(recipient_data))
+
+                    # Validate all recipients
+                    for recipient_email in recipient_emails:
+                        EmailValidator.validate(recipient_email)
                     
-                    # Validate recipient
-                    EmailValidator.validate(recipient_email)
-                    
-                    # Create mail item
-                    mail_item = outlook.CreateItem(0)
-                    mail_item.SendUsingAccount = account_object
-                    mail_item.To = recipient_email
+                    # Create mail item in selected account context when possible.
+                    mail_item = EmailService._create_mail_item_for_account(outlook, account_object)
+                    EmailService._apply_sender_to_mail_item(mail_item, account_object, sender_email)
+                    logger.info(f"Mail item created with SendUsingAccount set to: {sender_email}")
+                    mail_item.To = '; '.join(recipient_emails)
+                    logger.info(f"Recipients: {mail_item.To}")
                     
                     # Set subject (use processed if available)
                     if '_processed_subject' in recipient_data:
                         mail_item.Subject = recipient_data['_processed_subject']
+                        logger.debug(f"Using processed subject: {mail_item.Subject[:50]}...")
                     else:
                         mail_item.Subject = subject
+                        logger.debug(f"Using default subject: {subject[:50]}...")
                     
                     # Set body (use processed if available)
                     if '_processed_template' in recipient_data:
                         body_text = recipient_data['_processed_template']
+                        logger.debug(f"Using processed template ({len(body_text)} chars)")
                     else:
                         body_text = template
+                        logger.debug(f"Using default template ({len(body_text)} chars)")
                     
                     mail_item.HTMLBody = body_text.replace('\n', '<br>')
                     
@@ -329,11 +475,18 @@ class EmailService:
                                 except Exception as att_e:
                                     logger.warning(f"Could not add attachment {att_path}: {att_e}")
                     
-                    # Send
-                    mail_item.SendUsingAccount = account_object
+                    # Send - ensure sender identity is still bound right before send
+                    EmailService._apply_sender_to_mail_item(mail_item, account_object, sender_email)
+                    logger.info(f"\n>>> SENDING EMAIL <<<")
+                    logger.info(f"From: {sender_email}")
+                    logger.info(f"To: {mail_item.To}")
+                    logger.info(f"Subject: {mail_item.Subject[:60]}..." if len(mail_item.Subject) > 60 else f"Subject: {mail_item.Subject}")
+                    logger.info(f"Body preview: {mail_item.HTMLBody[:100]}..." if len(mail_item.HTMLBody) > 100 else f"Body: {mail_item.HTMLBody}")
+                    logger.info(f"Account used: {account_object}")
                     mail_item.Send()
+                    logger.info(f">>> EMAIL SENT <<<\n")
                     
-                    logger.debug(f"✓ Email {i}: Sent to {recipient_email}")
+                    logger.debug(f"✓ Email {i}: Sent to {'; '.join(recipient_emails)}")
                     sent_count += 1
                     
                     time.sleep(EMAIL_SEND_DELAY)

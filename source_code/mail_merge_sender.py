@@ -1,11 +1,12 @@
 import os
 import sys
 import logging
+import re
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLabel, QPushButton, QFileDialog, QLineEdit, QMessageBox, QTextEdit, 
     QGroupBox, QTableWidget, QTableWidgetItem, QTabWidget, QComboBox, QProgressBar,
-    QScrollArea, QCheckBox
+    QScrollArea, QCheckBox, QDialog, QListWidget, QListWidgetItem
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
@@ -39,6 +40,9 @@ class UniversalSender(QMainWindow):
         self.headers = []
         self.placeholders = []
         self.column_mapping = {}
+        self.placeholder_to_columns = {}  # NEW: Maps placeholder -> list of column indices for multiple column support
+        self.current_format_placeholder = ""
+        self.current_format_target_column = "(All mapped columns)"
         self.email_accounts = []
         self.template_formatting = {}  
         self.email_config = None  # Email configuration from wizard
@@ -183,7 +187,7 @@ class UniversalSender(QMainWindow):
         subject_layout.setContentsMargins(8, 8, 8, 8)
         subject_layout.setSpacing(4)
         self.subject_input = QLineEdit()
-        self.subject_input.setPlaceholderText("Enter email subject (use {NAME}, {EMAIL}, {DEVICES}, etc.)")
+        self.subject_input.setPlaceholderText("Enter email subject here...")
         self.subject_input.textChanged.connect(self.update_send_summary)
         self.subject_input.setMinimumHeight(28)
         subject_layout.addWidget(self.subject_input)
@@ -340,21 +344,33 @@ class UniversalSender(QMainWindow):
         main_layout = QVBoxLayout(widget)
         main_layout.setSpacing(6)
         main_layout.setContentsMargins(8, 8, 8, 8)
-        column_group = QGroupBox("Step 1: Select Column to Format")
+        column_group = QGroupBox("Step 1: Select Placeholder to Format")
         column_layout = QVBoxLayout()
         column_layout.setContentsMargins(6, 6, 6, 6)
         column_layout.setSpacing(4)
         column_select_layout = QHBoxLayout()
-        column_label = QLabel("Column:")
+        column_label = QLabel("Placeholder:")
         column_label.setMinimumWidth(70)
         column_select_layout.addWidget(column_label)
-        self.format_column_combo = QComboBox()
-        self.format_column_combo.setMinimumWidth(200)
-        self.format_column_combo.setMinimumHeight(24)
-        self.format_column_combo.currentTextChanged.connect(self.load_formatting_settings)
-        column_select_layout.addWidget(self.format_column_combo)
+        self.format_placeholder_combo = QComboBox()
+        self.format_placeholder_combo.setMinimumWidth(220)
+        self.format_placeholder_combo.setMinimumHeight(24)
+        self.format_placeholder_combo.currentTextChanged.connect(self.on_format_placeholder_changed)
+        column_select_layout.addWidget(self.format_placeholder_combo)
+        target_label = QLabel("Target Column:")
+        target_label.setMinimumWidth(95)
+        column_select_layout.addWidget(target_label)
+        self.format_target_column_combo = QComboBox()
+        self.format_target_column_combo.setMinimumWidth(240)
+        self.format_target_column_combo.setMinimumHeight(24)
+        self.format_target_column_combo.currentTextChanged.connect(self.on_format_target_column_changed)
+        column_select_layout.addWidget(self.format_target_column_combo)
         column_select_layout.addStretch()
         column_layout.addLayout(column_select_layout)
+        self.mapped_columns_label = QLabel("Mapped columns for selected placeholder will appear here.")
+        self.mapped_columns_label.setWordWrap(True)
+        self.mapped_columns_label.setStyleSheet(f"color: {var_theme.colors['text_muted']}; padding: 4px 0px;")
+        column_layout.addWidget(self.mapped_columns_label)
         column_group.setLayout(column_layout)
         main_layout.addWidget(column_group)
         bullet_group = QGroupBox("Step 2: Bullet Point Formatting")
@@ -597,21 +613,134 @@ class UniversalSender(QMainWindow):
         nav_layout.addWidget(self.next_btn_template)
         main_layout.addLayout(nav_layout)
         return widget
+
+    def get_mapped_column_names_for_placeholder(self, placeholder):
+        """Return mapped column names for a placeholder in display order."""
+        if not placeholder:
+            return []
+        mapped_indices = self.get_placeholder_column_indices(placeholder)
+        mapped_names = []
+        for idx in mapped_indices:
+            if 0 <= idx < len(self.headers):
+                mapped_names.append(self.headers[idx])
+        return mapped_names
+
+    def normalize_placeholder_name(self, placeholder):
+        """Normalize placeholder names to a token (no wrappers, upper-case)."""
+        if placeholder is None:
+            return ""
+        token = str(placeholder).strip()
+        # Remove common wrapper characters like { }, < >, [ ].
+        token = re.sub(r'^[\{\[<\s]+|[\}\]>\s]+$', '', token)
+        return token.strip().upper()
+
+    def get_placeholder_variants(self, placeholder):
+        """Return all supported placeholder wrapper variants for the same token."""
+        token = self.normalize_placeholder_name(placeholder)
+        if not token:
+            return []
+        return [
+            f"{{{token}}}",
+            f"<{token}>",
+            f"[[{token}]]",
+            f"<<{token}>>",
+            f"{{{{{token}}}}}",
+            f"[{token}]"
+        ]
+
+    def get_placeholder_column_indices(self, placeholder):
+        """Resolve mapped column indices even when placeholder keys use different wrappers."""
+        if not placeholder:
+            return []
+        if placeholder in self.placeholder_to_columns:
+            return self.placeholder_to_columns.get(placeholder, [])
+
+        requested_token = self.normalize_placeholder_name(placeholder)
+        for key, indices in self.placeholder_to_columns.items():
+            if self.normalize_placeholder_name(key) == requested_token:
+                return indices
+        return []
+
+    def refresh_formatting_placeholder_options(self):
+        """Refresh placeholder and target-column selectors for formatting tab."""
+        if not hasattr(self, 'format_placeholder_combo') or not hasattr(self, 'format_target_column_combo'):
+            return
+        previous_placeholder = self.format_placeholder_combo.currentText()
+        self.format_placeholder_combo.blockSignals(True)
+        self.format_placeholder_combo.clear()
+        self.format_placeholder_combo.addItem("-- Select Placeholder --")
+        for placeholder in self.placeholders:
+            self.format_placeholder_combo.addItem(placeholder)
+        if previous_placeholder and previous_placeholder in self.placeholders:
+            self.format_placeholder_combo.setCurrentText(previous_placeholder)
+        self.format_placeholder_combo.blockSignals(False)
+        if self.format_placeholder_combo.currentText() and self.format_placeholder_combo.currentText() != "-- Select Placeholder --":
+            self.on_format_placeholder_changed(self.format_placeholder_combo.currentText())
+        else:
+            self.on_format_placeholder_changed("")
+
+    def on_format_placeholder_changed(self, placeholder):
+        """Reload formatting controls when placeholder changes."""
+        self.current_format_placeholder = placeholder if placeholder != "-- Select Placeholder --" else ""
+        mapped_names = self.get_mapped_column_names_for_placeholder(self.current_format_placeholder)
+        if hasattr(self, 'mapped_columns_label'):
+            if mapped_names:
+                self.mapped_columns_label.setText(
+                    "Mapped columns: " + ", ".join(mapped_names)
+                )
+            elif self.current_format_placeholder:
+                self.mapped_columns_label.setText("No mapped columns yet. Assign columns in Step 3 (Map Columns).")
+            else:
+                self.mapped_columns_label.setText("Mapped columns for selected placeholder will appear here.")
+
+        if hasattr(self, 'format_target_column_combo'):
+            self.format_target_column_combo.blockSignals(True)
+            self.format_target_column_combo.clear()
+            self.format_target_column_combo.addItem("(All mapped columns)")
+            for col_name in mapped_names:
+                self.format_target_column_combo.addItem(col_name)
+            if self.current_format_target_column in ["(All mapped columns)"] + mapped_names:
+                self.format_target_column_combo.setCurrentText(self.current_format_target_column)
+            else:
+                self.current_format_target_column = "(All mapped columns)"
+                self.format_target_column_combo.setCurrentText(self.current_format_target_column)
+            self.format_target_column_combo.blockSignals(False)
+
+        self.load_formatting_settings()
+
+    def on_format_target_column_changed(self, column_name):
+        """Save and refresh preview when replacement target changes."""
+        self.current_format_target_column = column_name or "(All mapped columns)"
+        self.auto_save_and_update_preview()
+
     def add_replacement_from_inputs(self):
         """Add a new replacement from the input fields"""
+        placeholder = self.current_format_placeholder
+        if not placeholder:
+            QMessageBox.warning(self, "Placeholder Required", "Select a placeholder before adding replacements.")
+            return
+        mapped_columns = self.get_mapped_column_names_for_placeholder(placeholder)
+        if not mapped_columns:
+            QMessageBox.warning(self, "No Mapped Columns", "Map at least one column to this placeholder in tab 3 before adding replacements.")
+            return
         find_text = self.new_find_input.text().strip()
         if not find_text:
             QMessageBox.warning(self, "Input Required", "Please enter text to find.")
             return
         replace_text = self.new_replace_input.text()
         special_value = self.new_special_combo.currentData()
-        self.add_replacement_pair(find_text, replace_text, special_value)
+        target_column = self.format_target_column_combo.currentText() if hasattr(self, 'format_target_column_combo') else "(All mapped columns)"
+        if target_column != "(All mapped columns)" and target_column not in mapped_columns:
+            QMessageBox.warning(self, "Invalid Target", "Select a mapped column for this placeholder.")
+            return
+        self.add_replacement_pair(find_text, replace_text, special_value, target_column)
         self.new_find_input.clear()
         self.new_replace_input.clear()
         self.new_special_combo.setCurrentIndex(0)
         self.new_replace_input.setEnabled(True)
         self.auto_save_and_update_preview()
-    def add_replacement_pair(self, find_text="", replace_text="", special_value=None):
+
+    def add_replacement_pair(self, find_text="", replace_text="", special_value=None, target_column="(All mapped columns)"):
         """Add a new find/replace pair widget to the list"""
         pair_widget = QWidget()
         pair_layout = QHBoxLayout(pair_widget)
@@ -643,6 +772,16 @@ class UniversalSender(QMainWindow):
         replace_label.setMinimumWidth(120)
         replace_label.setWordWrap(False)
         pair_layout.addWidget(replace_label)
+        if target_column and target_column != "(All mapped columns)":
+            target_label = QLabel(f"[{target_column}]")
+            target_label.setStyleSheet("color: #d7ba7d; font-size: 8pt; font-style: italic;")
+            target_label.setMinimumWidth(120)
+            pair_layout.addWidget(target_label)
+        else:
+            target_label = QLabel("[All mapped columns]")
+            target_label.setStyleSheet("color: #d7ba7d; font-size: 8pt; font-style: italic;")
+            target_label.setMinimumWidth(120)
+            pair_layout.addWidget(target_label)
         pair_layout.addStretch()
         delete_btn = QPushButton("Delete")
         delete_btn.setStyleSheet(get_button_style('danger'))
@@ -654,7 +793,8 @@ class UniversalSender(QMainWindow):
             'widget': pair_widget,
             'find_text': find_text,
             'replace_text': replace_text,
-            'special_value': special_value
+            'special_value': special_value,
+            'target_column': target_column or "(All mapped columns)"
         }
         self.replacement_pairs.append(pair_data)
         insert_position = self.replacement_layout.count() - 1
@@ -668,7 +808,7 @@ class UniversalSender(QMainWindow):
                 break
         self.replacement_layout.removeWidget(pair_widget)
         pair_widget.deleteLater()
-        self.update_format_preview()
+        self.auto_save_and_update_preview()
     def on_special_replacement_changed(self, replace_input, special_combo):
         """Handle special replacement dropdown changes"""
         special_value = special_combo.currentData()
@@ -683,11 +823,12 @@ class UniversalSender(QMainWindow):
         is_enabled = (state == 2)  
         self.bullet_combo.setEnabled(is_enabled)
         self.auto_save_and_update_preview()
+
     def load_formatting_settings(self):
-        """Load saved formatting settings for selected column"""
-        column = self.format_column_combo.currentText()
-        if column in self.template_formatting:
-            settings = self.template_formatting[column]
+        """Load saved formatting settings for selected placeholder."""
+        placeholder = self.current_format_placeholder
+        if placeholder in self.template_formatting:
+            settings = self.template_formatting[placeholder]
             bullet_enabled = settings.get('bullet_enabled', False)
             if hasattr(self, 'enable_bullet_checkbox'):
                 self.enable_bullet_checkbox.setChecked(bullet_enabled)
@@ -703,8 +844,17 @@ class UniversalSender(QMainWindow):
                 pair['widget'].deleteLater()
                 self.replacement_pairs.pop(0)
             if replacements:
-                for find_text, replace_text, special_type in replacements:
-                    self.add_replacement_pair(find_text, replace_text, special_type)
+                for replacement_data in replacements:
+                    if len(replacement_data) == 4:
+                        find_text, replace_text, special_type, target_column = replacement_data
+                    elif len(replacement_data) == 3:
+                        find_text, replace_text, special_type = replacement_data
+                        target_column = "(All mapped columns)"
+                    else:
+                        find_text, replace_text = replacement_data
+                        special_type = None
+                        target_column = "(All mapped columns)"
+                    self.add_replacement_pair(find_text, replace_text, special_type, target_column)
         else:
             if hasattr(self, 'enable_bullet_checkbox'):
                 self.enable_bullet_checkbox.setChecked(False)
@@ -715,44 +865,51 @@ class UniversalSender(QMainWindow):
                 pair['widget'].deleteLater()
                 self.replacement_pairs.pop(0)
         self.update_format_preview()
+
     def save_formatting_rules(self, show_message=True):
-        """Save formatting rules for selected column"""
-        column = self.format_column_combo.currentText()
-        if not column:
+        """Save formatting rules for selected placeholder."""
+        placeholder = self.current_format_placeholder
+        if not placeholder:
             return
         replacements = []
+        mapped_columns = self.get_mapped_column_names_for_placeholder(placeholder)
         for pair in self.replacement_pairs:
             find_text = pair['find_text']
             replace_text = pair['replace_text']
             special_value = pair['special_value']
+            target_column = pair.get('target_column', "(All mapped columns)")
             if find_text:  
-                replacements.append((find_text, replace_text, special_value))
-        self.template_formatting[column] = {
+                if target_column != "(All mapped columns)" and target_column not in mapped_columns:
+                    continue
+                replacements.append((find_text, replace_text, special_value, target_column))
+        self.template_formatting[placeholder] = {
             'bullet_enabled': self.enable_bullet_checkbox.isChecked() if hasattr(self, 'enable_bullet_checkbox') else False,
             'bullet': self.bullet_combo.currentData(),
             'replacements': replacements
         }
         if show_message:
-            QMessageBox.information(self, "Saved", f"Formatting rules saved for column '{column}'")
+            QMessageBox.information(self, "Saved", f"Formatting rules saved for placeholder '{placeholder}'")
+
     def auto_save_and_update_preview(self):
         """Automatically save formatting rules and update preview without showing message"""
         self.save_formatting_rules(show_message=False)
         self.update_format_preview()
+
     def update_format_preview(self):
-        """Update the formatting preview with current settings"""
+        """Update review preview showing all mapped columns for selected placeholder."""
         try:
-            column = self.format_column_combo.currentText()
-            if not column or not hasattr(self, 'imported_data') or not self.imported_data:
+            placeholder = self.current_format_placeholder
+            if not placeholder:
+                self.format_preview.setText("Select a placeholder to review formatting.")
+                return
+            if not hasattr(self, 'imported_data') or not self.imported_data:
                 self.format_preview.setText("No data to preview")
                 return
-            col_index = None
-            for i, header in enumerate(self.headers):
-                if header == column:
-                    col_index = i
-                    break
-            if col_index is None or not self.imported_data:
-                self.format_preview.setText("No data found for this column")
+            mapped_indices = self.get_placeholder_column_indices(placeholder)
+            if not mapped_indices:
+                self.format_preview.setText("No mapped columns for this placeholder. Configure mapping in tab 3.")
                 return
+
             preview_row_index = 0
             if self.selected_rows:
                 preview_row_index = min(self.selected_rows)
@@ -761,32 +918,84 @@ class UniversalSender(QMainWindow):
                 preview_source = "First Row (no selection)"
             if preview_row_index >= len(self.imported_data):
                 preview_row_index = 0
-            sample_data = self.imported_data[preview_row_index][col_index] if col_index < len(self.imported_data[preview_row_index]) else ""
-            formatted = self.format_column_data_new(str(sample_data), column)
-            self.format_preview.setText(f"Preview from: {preview_source}\n\nOriginal:\n{sample_data}\n\n{'='*40}\n\nFormatted:\n{formatted}")
+
+            row = self.imported_data[preview_row_index]
+            preview_sections = [f"Preview from: {preview_source}", ""]
+            combined_original = []
+            combined_formatted = []
+
+            for col_idx in mapped_indices:
+                if 0 <= col_idx < len(self.headers):
+                    col_name = self.headers[col_idx]
+                    raw_value = str(row[col_idx]) if col_idx < len(row) and row[col_idx] is not None else ""
+                    formatted_value = self.format_column_data_new(raw_value, placeholder, col_name)
+                    combined_original.append(raw_value)
+                    combined_formatted.append(formatted_value)
+                    preview_sections.append(f"Column: {col_name}")
+                    preview_sections.append(f"Original: {raw_value}")
+                    preview_sections.append(f"Formatted: {formatted_value}")
+                    preview_sections.append("-" * 40)
+
+            preview_sections.append("Combined Original:")
+            preview_sections.append(" | ".join(combined_original))
+            preview_sections.append("")
+            preview_sections.append("Combined Formatted:")
+            preview_sections.append(" | ".join(combined_formatted))
+            self.format_preview.setText("\n".join(preview_sections))
         except Exception as e:
             self.format_preview.setText(f"Preview error: {str(e)}")
             logger.error(f"Error updating format preview: {e}")
-    def format_column_data_new(self, data, column):
-        """New formatting function with bullet points and string replacements"""
+
+    def format_column_data_new(self, data, placeholder, source_column=None, include_global=True):
+        """Apply placeholder formatting rules and optional per-column replacement targeting."""
         if not data:
+            logger.debug(f"format_column_data_new: No data for placeholder '{placeholder}'")
             return data
         formatted = str(data)
-        if column not in self.template_formatting:
+        logger.debug(f"format_column_data_new: Processing placeholder='{placeholder}', source_column='{source_column}', data='{data[:50] if len(str(data)) > 50 else data}'")
+        
+        # Use safe lookup with backward compatibility
+        settings = self.get_formatting_settings(placeholder)
+        if not settings:
+            logger.debug(f"format_column_data_new: No formatting settings found for placeholder '{placeholder}'")
             return formatted
-        settings = self.template_formatting[column]
+        
         replacements = settings.get('replacements', [])
-        for replacement_tuple in replacements:
-            if len(replacement_tuple) == 3:
+        logger.debug(f"format_column_data_new: Found {len(replacements)} replacement rules for '{placeholder}'")
+        
+        for i, replacement_tuple in enumerate(replacements):
+            if len(replacement_tuple) == 4:
+                find_text, replace_text, special_type, target_column = replacement_tuple
+            elif len(replacement_tuple) == 3:
                 find_text, replace_text, special_type = replacement_tuple
+                target_column = "(All mapped columns)"
             else:
                 find_text, replace_text = replacement_tuple
                 special_type = None
+                target_column = "(All mapped columns)"
+            
+            logger.debug(f"  Rule {i}: find='{find_text}' → replace='{replace_text}' (special={special_type}), target_column='{target_column}'")
+            
             if find_text:
+                # Check if this rule applies to the current source column
+                if target_column in ("(All mapped columns)", "", None):
+                    if not include_global:
+                        logger.debug("    Skipping global rule for per-column pass")
+                        continue
+                elif source_column != target_column:
+                    logger.debug(f"    Skipping: target_column '{target_column}' != source_column '{source_column}'")
+                    continue
+                
                 actual_replacement = special_type if special_type is not None else replace_text
-                formatted = formatted.replace(find_text, actual_replacement)
+                if find_text in formatted:
+                    logger.debug(f"    Applying: Found '{find_text}' in data, replacing with '{actual_replacement}'")
+                    formatted = formatted.replace(find_text, actual_replacement)
+                else:
+                    logger.debug(f"    Not found: '{find_text}' not in data")
+        
         bullet_enabled = settings.get('bullet_enabled', False)
         if bullet_enabled:
+            logger.debug(f"format_column_data_new: Applying bullet formatting")
             bullet = settings.get('bullet', '-')
             lines = formatted.split('\n')
             formatted_lines = []
@@ -795,21 +1004,89 @@ class UniversalSender(QMainWindow):
                 if line:
                     formatted_lines.append(f"\t{bullet} {line}")
             formatted = '\n'.join(formatted_lines)
+        
+        logger.debug(f"format_column_data_new: Result for '{placeholder}': '{formatted[:50] if len(formatted) > 50 else formatted}'")
         return formatted
+
     def format_column_data(self, data, column):
         """Legacy compatibility - redirects to new formatting function"""
-        return self.format_column_data_new(data, column)
+        return self.format_column_data_new(data, column, None)
+
+    def get_formatting_settings(self, placeholder_or_column):
+        """Safely retrieve formatting settings with backward compatibility.
+        Checks both placeholder keys (new) and column keys (old) for compatibility."""
+        if not placeholder_or_column:
+            return None
+        # First try as placeholder (new behavior)
+        if placeholder_or_column in self.template_formatting:
+            return self.template_formatting[placeholder_or_column]
+        # Fallback: try as column name (old behavior for backward compat)
+        requested_token = self.normalize_placeholder_name(placeholder_or_column)
+        for key, settings in self.template_formatting.items():
+            if key.lower() == placeholder_or_column.lower():
+                return settings
+            if self.normalize_placeholder_name(key) == requested_token:
+                return settings
+        return None
+
     def process_template_placeholders(self, template, row_data):
-        if not self.headers or not row_data:
+        if not template:
             return template
-        processed_template = template
-        for i, header in enumerate(self.headers):
-            placeholder = f"{{{header.upper()}}}"
-            if placeholder in processed_template and i < len(row_data):
-                data = str(row_data[i]) if row_data[i] is not None else ""
-                if header in self.template_formatting:
-                    data = self.format_column_data(data, header)
-                processed_template = processed_template.replace(placeholder, data)
+        if not self.headers or row_data is None:
+            logger.warning("No headers or row data provided to process_template_placeholders")
+            return template
+
+        # Match all supported placeholder wrappers while preserving exact token text in template.
+        placeholder_pattern = re.compile(
+            r'\{\{[^}]+\}\}|\{[^}]+\}|<<[^>]+>>|<[^>]+>|\[\[[^\]]+\]\]|\[[^\]]+\]'
+        )
+
+        def replace_match(match):
+            raw_placeholder = match.group(0)
+            token = self.normalize_placeholder_name(raw_placeholder)
+            if not token:
+                return raw_placeholder
+
+            # Primary path: use explicit placeholder-to-columns mapping.
+            mapped_indices = self.get_placeholder_column_indices(token)
+            if mapped_indices:
+                values = []
+                for col_idx in mapped_indices:
+                    if 0 <= col_idx < len(row_data):
+                        raw_value = "" if row_data[col_idx] is None else str(row_data[col_idx]).strip()
+                        if not raw_value:
+                            continue
+                        source_column = self.headers[col_idx] if 0 <= col_idx < len(self.headers) else None
+                        value = self.format_column_data_new(raw_value, token, source_column, include_global=False)
+                        values.append(value)
+
+                combined_value = " ".join(values)
+                if combined_value:
+                    combined_value = self.format_column_data_new(
+                        combined_value,
+                        token,
+                        "(All mapped columns)",
+                        include_global=True
+                    )
+                return combined_value
+
+            # Fallback path: header name matches token.
+            header_index = None
+            for idx, header in enumerate(self.headers):
+                if self.normalize_placeholder_name(header) == token:
+                    header_index = idx
+                    break
+
+            if header_index is not None and header_index < len(row_data):
+                raw_value = "" if row_data[header_index] is None else str(row_data[header_index])
+                source_header = self.headers[header_index]
+                return self.format_column_data_new(raw_value, token, source_header, include_global=True)
+
+            # Leave unresolved placeholders untouched to make mapping issues visible.
+            return raw_placeholder
+
+        processed_template = placeholder_pattern.sub(replace_match, template)
+        logger.debug("Template placeholder processing complete")
         return processed_template
     def create_send_tab(self) -> QWidget:
         widget = QWidget()
@@ -1003,6 +1280,8 @@ class UniversalSender(QMainWindow):
         
         # Update format preview when switching to Template Formatting tab (index 3)
         if index == 3 and hasattr(self, 'format_preview'):
+            if hasattr(self, 'format_placeholder_combo'):
+                self.refresh_formatting_placeholder_options()
             self.update_format_preview()  
     def browse_file(self):
         file_filter = "All Files (*.*);;CSV Files (*.csv);;Excel Files (*.xlsx)"
@@ -1022,9 +1301,8 @@ class UniversalSender(QMainWindow):
             if result['success']:
                 self.imported_data = result['data']
                 self.headers = result['headers']
-                if hasattr(self, 'format_column_combo'):
-                    self.format_column_combo.clear()
-                    self.format_column_combo.addItems(self.headers)
+                if hasattr(self, 'format_placeholder_combo'):
+                    self.refresh_formatting_placeholder_options()
                 self.populate_data_table()
                 self.next_btn_1.setEnabled(True)
                 self.statusBar().showMessage(f"Imported {len(self.imported_data)} rows")
@@ -1262,6 +1540,8 @@ The program will now use these settings for extracting email addresses."""
                 )
             if self.headers and hasattr(self, 'mapping_table'):
                 self.update_mapping_table()
+            if hasattr(self, 'format_placeholder_combo'):
+                self.refresh_formatting_placeholder_options()
         except Exception as e:
             logger.error(f"Error detecting placeholders: {e}")
             import traceback
@@ -1281,43 +1561,133 @@ The program will now use these settings for extracting email addresses."""
             placeholder_item = QTableWidgetItem(placeholder)
             placeholder_item.setFlags(Qt.ItemIsEnabled)
             self.mapping_table.setItem(row, 0, placeholder_item)
-            column_combo = QComboBox()
-            column_combo.addItem("-- Select Column --")
-            column_combo.addItems(self.headers)
-            column_combo.setMinimumWidth(260)  
-            column_combo.setMaximumWidth(260)
-            column_combo.setMinimumHeight(25)   
-            column_combo.setStyleSheet(var_theme.get_input_style() + 
-                f"""QComboBox {{
-                    padding: 4px 8px;
-                    font-size: 10pt;
-                }}
-                QComboBox::drop-down {{
-                    width: 25px;
-                }}
-                QComboBox::item {{
-                    padding: 4px 8px;
-                    min-height: 20px;
-                }}""")
-            column_combo.currentTextChanged.connect(self.update_send_summary)
-            if placeholder in suggestions:
-                suggested_column = suggestions[placeholder]
-                if suggested_column in self.headers:
-                    index = self.headers.index(suggested_column) + 1
-                    column_combo.setCurrentIndex(index)
-            self.mapping_table.setCellWidget(row, 1, column_combo)
+            
+            # Create a container widget for column selection
+            container_widget = QWidget()
+            container_layout = QHBoxLayout(container_widget)
+            container_layout.setContentsMargins(0, 0, 0, 0)
+            container_layout.setSpacing(5)
+            
+            # Show selected columns or allow selection
+            columns_display = QLineEdit()
+            columns_display.setReadOnly(True)
+            columns_display.setMinimumHeight(25)
+            columns_display.setMinimumWidth(160)
+            columns_display.setMaximumWidth(160)
+            
+            # Display assigned columns
+            if placeholder in self.placeholder_to_columns:
+                assigned_columns = [self.headers[idx] for idx in self.placeholder_to_columns[placeholder]]
+                columns_display.setText(", ".join(assigned_columns))
+            elif placeholder in self.column_mapping:
+                col_index = self.column_mapping[placeholder]
+                if 0 <= col_index < len(self.headers):
+                    columns_display.setText(self.headers[col_index])
+            else:
+                columns_display.setText("-- Not Set --")
+                columns_display.setStyleSheet(var_theme.get_input_style() + "color: gray;")
+            
+            # Add button to select columns
+            select_btn = QPushButton("Select Column(s)")
+            select_btn.setMinimumHeight(25)
+            select_btn.setMaximumWidth(130)
+            select_btn.setStyleSheet(get_button_style('default'))
+            select_btn.clicked.connect(lambda checked, p=placeholder: self.show_column_selector_for_placeholder(p))
+            
+            container_layout.addWidget(columns_display)
+            container_layout.addWidget(select_btn)
+            container_layout.addStretch()
+            
+            self.mapping_table.setCellWidget(row, 1, container_widget)
+            
+            # Show sample data
             sample_data = ""
-            if placeholder in suggestions and suggestions[placeholder] in self.headers:
+            if placeholder in self.placeholder_to_columns:
+                # Show sample from all assigned columns
+                samples = []
+                for col_index in self.placeholder_to_columns[placeholder]:
+                    if self.imported_data and col_index < len(self.imported_data[0]):
+                        samples.append(str(self.imported_data[0][col_index])[:30])
+                sample_data = " | ".join(samples)
+            elif placeholder in suggestions and suggestions[placeholder] in self.headers:
                 col_index = self.headers.index(suggestions[placeholder])
                 if self.imported_data and col_index < len(self.imported_data[0]):
                     sample_data = str(self.imported_data[0][col_index])[:50]
+            
             sample_item = QTableWidgetItem(sample_data)
             sample_item.setFlags(Qt.ItemIsEnabled)
             self.mapping_table.setItem(row, 2, sample_item)
+        
         self.mapping_table.setColumnWidth(0, 200)  
-        self.mapping_table.setColumnWidth(1, 280)  
-        self.mapping_table.setColumnWidth(2, 650)  
+        self.mapping_table.setColumnWidth(1, 350)  
+        self.mapping_table.setColumnWidth(2, 580)  
         self.mapping_table.resizeRowsToContents()
+        if hasattr(self, 'format_placeholder_combo'):
+            self.refresh_formatting_placeholder_options()
+    
+    def show_column_selector_for_placeholder(self, placeholder):
+        """Show a dialog to select multiple columns for a placeholder"""
+        dialog = QDialog(self)
+        dialog.setWindowTitle(f"Select Columns for: {placeholder}")
+        dialog.setMinimumWidth(400)
+        dialog.setMinimumHeight(350)
+        
+        layout = QVBoxLayout(dialog)
+        
+        label = QLabel(f"Select one or more columns to map to the placeholder '{placeholder}':\n")
+        label.setWordWrap(True)
+        layout.addWidget(label)
+        
+        # List widget for column selection
+        list_widget = QListWidget()
+        list_widget.setSelectionMode(list_widget.MultiSelection)
+        for i, header in enumerate(self.headers):
+            item = QListWidgetItem(header)
+            list_widget.addItem(item)
+            # Pre-check if already selected
+            if placeholder in self.placeholder_to_columns and i in self.placeholder_to_columns[placeholder]:
+                item.setSelected(True)
+        
+        layout.addWidget(QLabel("Available Columns:"))
+        layout.addWidget(list_widget)
+        
+        # Buttons
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        ok_btn = QPushButton("OK")
+        ok_btn.setMinimumWidth(100)
+        ok_btn.setStyleSheet(get_button_style('primary'))
+        ok_btn.clicked.connect(dialog.accept)
+        
+        cancel_btn = QPushButton("Cancel")
+        cancel_btn.setMinimumWidth(100)
+        cancel_btn.setStyleSheet(get_button_style('default'))
+        cancel_btn.clicked.connect(dialog.reject)
+        
+        button_layout.addWidget(ok_btn)
+        button_layout.addWidget(cancel_btn)
+        layout.addLayout(button_layout)
+        
+        if dialog.exec_() == QDialog.Accepted:
+            # Get selected columns
+            selected_indices = []
+            for i, header in enumerate(self.headers):
+                if list_widget.item(i).isSelected():
+                    selected_indices.append(i)
+            
+            if selected_indices:
+                self.placeholder_to_columns[placeholder] = selected_indices
+                # Also update single column_mapping for compatibility
+                self.column_mapping[placeholder] = selected_indices[0]
+                self.update_mapping_table()
+            else:
+                if placeholder in self.placeholder_to_columns:
+                    del self.placeholder_to_columns[placeholder]
+                if placeholder in self.column_mapping:
+                    del self.column_mapping[placeholder]
+                self.update_mapping_table()
+    
     def on_account_changed(self, index):
         """Log when user changes the selected account"""
         if index >= 0 and index < len(self.email_accounts_list):
@@ -1330,6 +1700,20 @@ The program will now use these settings for extracting email addresses."""
         if not hasattr(self, 'account_combo'):
             logger.warning("Account combo not loaded yet, skipping email account loading")
             return
+
+        # Preserve previous selection to avoid falling back to primary account after refresh.
+        previous_selected_email = ""
+        try:
+            prev_index = self.account_combo.currentIndex()
+            if prev_index >= 0:
+                prev_data = self.account_combo.itemData(prev_index)
+                if prev_data:
+                    previous_selected_email = str(prev_data).strip().lower()
+                elif prev_index < len(self.email_accounts_list):
+                    previous_selected_email = str(self.email_accounts_list[prev_index].get('email', '')).strip().lower()
+        except Exception:
+            previous_selected_email = ""
+
         self.account_combo.clear()
         self.email_accounts_list.clear()
         self.account_combo.addItem("No Outlook Integration Available")
@@ -1343,12 +1727,16 @@ The program will now use these settings for extracting email addresses."""
             if self.email_accounts_list:
                 logger.info(f"\n{'='*60}")
                 logger.info(f"DROPDOWN MENU ACCOUNT MAPPING:")
+                selected_index = 0
                 for index, account in enumerate(self.email_accounts_list):
                     account_display = f"{account['email']} (Account {index + 1})"
                     self.account_combo.addItem(account_display)
                     self.account_combo.setItemData(index, account['email'])
                     logger.info(f"  Dropdown Index[{index}] → {account['email']}")
+                    if previous_selected_email and str(account['email']).strip().lower() == previous_selected_email:
+                        selected_index = index
                 logger.info(f"{'='*60}\n")
+                self.account_combo.setCurrentIndex(selected_index)
             else:
                 self.account_combo.addItem("No email accounts found")
                 self.email_accounts_list = []
@@ -1390,7 +1778,8 @@ The program will now use these settings for extracting email addresses."""
                     f"• Recipients: {recipient_count} selected contacts\n"
                     f"• Subject: ✓\n"
                     f"• Template: ✓\n" 
-                    f"• Sending from: {account_email}"
+                    f"• Selected sender: {account_email}\n"
+                    f"• Resolved sender: will validate before sending"
                 )
             else:
                 summary_parts = []
@@ -1466,20 +1855,6 @@ The program will now use these settings for extracting email addresses."""
                                   "Please select at least one recipient by checking the boxes in the data table.")
                 return
             try:
-                mappings = {}
-                for row in range(self.mapping_table.rowCount()):
-                    placeholder = self.mapping_table.item(row, 0).text()
-                    combo = self.mapping_table.cellWidget(row, 1)
-                    if combo and combo.currentIndex() > 0:
-                        column_name = combo.currentText()
-                        if column_name in self.headers:
-                            col_index = self.headers.index(column_name)
-                            mappings[placeholder] = col_index
-            except Exception as e:
-                logger.error(f"Error building mappings: {e}")
-                QMessageBox.critical(self, "Mapping Error", f"Error processing column mappings: {str(e)}")
-                return
-            try:
                 recipients = []
                 for row_index in sorted(self.selected_rows):
                     if row_index < len(self.imported_data):
@@ -1519,23 +1894,40 @@ The program will now use these settings for extracting email addresses."""
                 logger.error(f"Error building recipients: {e}")
                 QMessageBox.critical(self, "Recipients Error", f"Error processing recipients: {str(e)}")
                 return
-            reply = QMessageBox.question(
-                self, "Confirm Sending",
-                f"Send emails to {len(recipients)} recipients?" + 
-                (f"\nAttachments: {len(self.attachments)} files" if self.attachments else ""),
-                QMessageBox.Yes | QMessageBox.No
-            )
-            if reply != QMessageBox.Yes:
-                return
+
             account_index = self.account_combo.currentIndex()
             if account_index < 0 or account_index >= len(self.email_accounts_list):
                 QMessageBox.warning(self, "Account Error", "Please select a valid email account.")
                 return
             selected_account = self.email_accounts_list[account_index]
             sender_email = selected_account['email']
+
+            # Resolve account through Outlook before user confirms send.
+            try:
+                resolved_sender_email = EmailSender.resolve_sender_email(selected_account)
+            except Exception as e:
+                QMessageBox.critical(
+                    self,
+                    "Sender Resolution Error",
+                    f"Could not resolve selected sender account.\n\nSelected: {sender_email}\nError: {str(e)}"
+                )
+                return
+
+            reply = QMessageBox.question(
+                self, "Confirm Sending",
+                f"Send emails to {len(recipients)} recipients?\n"
+                f"Selected sender: {sender_email}\n"
+                f"Resolved sender: {resolved_sender_email}" +
+                (f"\nAttachments: {len(self.attachments)} files" if self.attachments else ""),
+                QMessageBox.Yes | QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
             logger.info(f"Selected dropdown index[{account_index}] = Account {account_index + 1}")
             logger.info(f"Sender email address: {sender_email}")
+            logger.info(f"Resolved sender email address: {resolved_sender_email}")
             self.log_display.append(f"Using sender account: {sender_email}")
+            self.log_display.append(f"Resolved sender account: {resolved_sender_email}")
             self.progress_bar.setVisible(True)
             self.progress_bar.setRange(0, 0)
             self.send_btn.setEnabled(False)
@@ -1543,26 +1935,20 @@ The program will now use these settings for extracting email addresses."""
             try:
                 processed_recipients = []
                 for recipient in recipients:
-                    email_body = template
-                    email_subject = subject
+                    # Build row data list from recipient dict
+                    row_data = []
                     for header in self.headers:
-                        placeholders = [
-                            f"{{{header.upper()}}}",
-                            f"{{{header}}}",
-                            f"<{header.upper()}>",
-                            f"<{header}>"
-                        ]
-                        if header in recipient:
-                            data = str(recipient[header]) if recipient[header] is not None else ""
-                            if header in self.template_formatting:
-                                data = self.format_column_data(data, header)
-                            for placeholder in placeholders:
-                                email_body = email_body.replace(placeholder, data)
-                                email_subject = email_subject.replace(placeholder, data)
+                        row_data.append(recipient.get(header, ""))
+                    
+                    # Use process_template_placeholders which handles multiple columns
+                    email_body = self.process_template_placeholders(template, row_data)
+                    email_subject = self.process_template_placeholders(subject, row_data)
+                    
                     processed_recipient = recipient.copy()
                     processed_recipient['_processed_template'] = email_body
                     processed_recipient['_processed_subject'] = email_subject
                     processed_recipients.append(processed_recipient)
+                
                 logger.info(f"Sending {len(processed_recipients)} emails from: {sender_email}")
                 result = EmailSender.send_emails(
                     processed_recipients, subject, template,  

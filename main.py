@@ -37,6 +37,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 # Initialize logging to files and console before any other imports
 from assets.logger_setup import LoggerSetup
+from assets.constants import LOG_FILE
 from assets.persistence import PersistenceManager
 
 LoggerSetup.setup_logging()  # Set up rotating file logger in ~/EmailSender_Logs/
@@ -202,7 +203,7 @@ class EmailSenderApp:
             logging.error(traceback.format_exc())
             try:
                 QMessageBox.critical(None, "Application Error", 
-                    f"{error_msg}\n\nSee log file for details:\n{os.path.join(os.path.expanduser('~'), 'EmailSender_Logs', 'main.log')}")
+                    f"{error_msg}\n\nSee log file for details:\n{LOG_FILE}")
             except:
                 pass
             return 1
@@ -233,10 +234,6 @@ def main():
         
         # Cleanup: Stop all background threads
         ThreadingManager.cleanup()
-        
-        # Save session state before exit
-        from assets.persistence import PersistenceManager
-        logger.info("Saving final session...")
         
         return exit_code
     

@@ -23,6 +23,7 @@ class EmailConfig:
     email_template: str
     send_multiple_together: bool = False  # True: send one email to all addresses, False: send separate emails
     custom_validators: Optional[List[str]] = None
+    placeholder_columns: Optional[dict] = None  # NEW: Maps placeholder_name -> List[column_indices]
     
     def to_dict(self):
         """Convert to dictionary for persistence"""
@@ -32,7 +33,8 @@ class EmailConfig:
             'separator_chars': self.separator_chars,
             'email_template': self.email_template,
             'send_multiple_together': self.send_multiple_together,
-            'custom_validators': self.custom_validators or []
+            'custom_validators': self.custom_validators or [],
+            'placeholder_columns': self.placeholder_columns or {}  # NEW
         }
     
     @classmethod
@@ -44,7 +46,8 @@ class EmailConfig:
             separator_chars=data.get('separator_chars', []),
             email_template=data.get('email_template', r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'),
             send_multiple_together=data.get('send_multiple_together', False),
-            custom_validators=data.get('custom_validators', [])
+            custom_validators=data.get('custom_validators', []),
+            placeholder_columns=data.get('placeholder_columns', {})  # NEW
         )
 
 
@@ -64,7 +67,7 @@ class EmailConfigurationWizard(QDialog):
         # State tracking (persists across step navigation)
         self.selected_email_columns = {}  # Column index -> checked state
         self.multiple_emails_enabled = False
-        self.send_multiple_together = False  # Send one email to all addresses vs separate emails
+        self.send_multiple_together = True  # Default to True (Send Together), can be changed in Step 3
         self.selected_separators = {}  # Separator -> checked state
         self.template_text = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"  # Email validation regex
         
@@ -210,7 +213,7 @@ class EmailConfigurationWizard(QDialog):
         self.content_layout.addWidget(group)
     
     def show_step_2(self):
-        """Step 2: Multiple emails per row"""
+        """Step 2: Multiple emails per row - YES/NO buttons instead of checkbox"""
         self.clear_content()
         self.current_step = 2
         self.step_label.setText("Step 2/6: Multiple Emails Per Row")
@@ -231,11 +234,25 @@ class EmailConfigurationWizard(QDialog):
         info.setStyleSheet(f"color: {var_theme.colors['text_secondary']}; padding: 10px;")
         layout.addWidget(info)
         
-        self.multiple_emails_checkbox = QCheckBox("Multiple emails can be in one cell")
-        self.multiple_emails_checkbox.setChecked(self.multiple_emails_enabled)
-        self.multiple_emails_checkbox.setStyleSheet("padding: 10px;")
-        layout.addWidget(self.multiple_emails_checkbox)
+        # Yes/No buttons instead of checkbox
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
         
+        yes_btn = QPushButton("YES")
+        yes_btn.setStyleSheet(get_button_style('success' if self.multiple_emails_enabled else 'default'))
+        yes_btn.setMinimumWidth(120)
+        yes_btn.clicked.connect(lambda: self.on_step2_yes_clicked(yes_btn, no_btn))
+        
+        no_btn = QPushButton("NO")
+        no_btn.setStyleSheet(get_button_style('success' if not self.multiple_emails_enabled else 'default'))
+        no_btn.setMinimumWidth(120)
+        no_btn.clicked.connect(lambda: self.on_step2_no_clicked(yes_btn, no_btn))
+        
+        button_layout.addWidget(yes_btn)
+        button_layout.addWidget(no_btn)
+        button_layout.addStretch()
+        
+        layout.addLayout(button_layout)
         layout.addStretch()
         group.setLayout(layout)
         self.content_layout.addWidget(group)
@@ -277,11 +294,11 @@ class EmailConfigurationWizard(QDialog):
             layout.addWidget(mode_label)
             
             together_radio = QCheckBox("Send TOGETHER (one email to all addresses in the row)")
-            together_radio.setChecked(self.send_multiple_together)
+            together_radio.setChecked(self.send_multiple_together)  # Default: True
             together_radio.setStyleSheet("padding: 10px;")
             
             separate_radio = QCheckBox("Send SEPARATE (individual email to each address)")
-            separate_radio.setChecked(not self.send_multiple_together)
+            separate_radio.setChecked(not self.send_multiple_together)  # Default: False
             separate_radio.setStyleSheet("padding: 10px;")
             
             # Connect to ensure only one is checked
@@ -353,9 +370,9 @@ class EmailConfigurationWizard(QDialog):
                 for sep, checkbox in self.separator_checkboxes.items():
                     checkbox.setChecked(self.selected_separators.get(sep, False))
             else:
-                # Pre-check common ones on first visit
+                # Default: Only Semicolon (;) on first visit - Comma unchecked
                 self.separator_checkboxes[';'].setChecked(True)
-                self.separator_checkboxes[','].setChecked(True)
+                self.separator_checkboxes[','].setChecked(False)
             
             for checkbox in self.separator_checkboxes.values():
                 layout.addWidget(checkbox)
@@ -563,3 +580,15 @@ Template:             Email regex validation active
             self.template_input.setReadOnly(True)
         else:
             self.template_input.setReadOnly(False)
+    
+    def on_step2_yes_clicked(self, yes_btn, no_btn):
+        """Handle YES button click on Step 2"""
+        self.multiple_emails_enabled = True
+        yes_btn.setStyleSheet(get_button_style('success'))
+        no_btn.setStyleSheet(get_button_style('default'))
+    
+    def on_step2_no_clicked(self, yes_btn, no_btn):
+        """Handle NO button click on Step 2"""
+        self.multiple_emails_enabled = False
+        no_btn.setStyleSheet(get_button_style('success'))
+        yes_btn.setStyleSheet(get_button_style('default'))
