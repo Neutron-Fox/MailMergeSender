@@ -37,10 +37,12 @@ class UniversalSender(QMainWindow):
         self.selected_rows = set()  
         self.attachments = []  
         self.email_accounts_list = []  
+        self.signatures_list = []  # NEW: List of available Outlook signatures
         self.headers = []
         self.placeholders = []
         self.column_mapping = {}
         self.placeholder_to_columns = {}  # NEW: Maps placeholder -> list of column indices for multiple column support
+        self.placeholder_to_signature = {}  # NEW: Maps placeholder -> selected signature name
         self.current_format_placeholder = ""
         self.current_format_target_column = "(All mapped columns)"
         self.email_accounts = []
@@ -56,6 +58,7 @@ class UniversalSender(QMainWindow):
         self.tab_widgets = {}
         self.tabs_created = set()
         self.email_accounts_loaded = False
+        self.signatures_loaded = False
         self.replacement_pairs = []  
         self.setup_ui()
         self.apply_theme()
@@ -297,6 +300,28 @@ class UniversalSender(QMainWindow):
         layout = QVBoxLayout(widget)
         layout.setSpacing(12)
         layout.setContentsMargins(15, 15, 15, 15)
+        
+        # Signature loading section
+        signature_group = QGroupBox("Signature Management")
+        signature_layout = QHBoxLayout()
+        signature_layout.setContentsMargins(12, 12, 12, 12)
+        signature_layout.setSpacing(8)
+        signature_label = QLabel("Load available Outlook signatures to use in your email template:")
+        signature_label.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 9pt;")
+        load_sig_btn = QPushButton("Load Signatures")
+        load_sig_btn.setStyleSheet(get_button_style('primary'))
+        load_sig_btn.setMaximumWidth(150)
+        load_sig_btn.clicked.connect(lambda: self.load_signatures(force=True, quiet=False))
+        self.signature_status_label = QLabel("No signatures loaded yet")
+        self.signature_status_label.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 9pt;")
+        signature_layout.addWidget(signature_label)
+        signature_layout.addWidget(load_sig_btn)
+        signature_layout.addWidget(self.signature_status_label)
+        signature_layout.addStretch()
+        signature_group.setLayout(signature_layout)
+        layout.addWidget(signature_group)
+        
+        # Column mapping section
         mapping_group = QGroupBox("Column Mapping")
         mapping_layout = QVBoxLayout()
         mapping_layout.setContentsMargins(12, 12, 12, 12)
@@ -309,16 +334,17 @@ class UniversalSender(QMainWindow):
         instructions_label.setWordWrap(True)
         mapping_layout.addWidget(instructions_label)
         self.mapping_table = QTableWidget()
-        self.mapping_table.setColumnCount(3)
-        self.mapping_table.setHorizontalHeaderLabels(["Placeholder", "Data Column", "Sample Data"])
-        self.mapping_table.setMinimumHeight(350)
-        self.mapping_table.setMaximumHeight(400)  
+        self.mapping_table.setColumnCount(4)
+        self.mapping_table.setHorizontalHeaderLabels(["Placeholder", "Data Column", "Signature", "Sample Data"])
+        self.mapping_table.setMinimumHeight(300)
+        self.mapping_table.setMaximumHeight(350)  
         self.mapping_table.setStyleSheet(get_table_style())
         self.mapping_table.setAlternatingRowColors(True)
         self.mapping_table.horizontalHeader().setStretchLastSection(False)
-        self.mapping_table.setColumnWidth(0, 150)  
-        self.mapping_table.setColumnWidth(1, 200)  
-        self.mapping_table.setColumnWidth(2, 250)  
+        self.mapping_table.setColumnWidth(0, 130)  
+        self.mapping_table.setColumnWidth(1, 170)  
+        self.mapping_table.setColumnWidth(2, 150)  
+        self.mapping_table.setColumnWidth(3, 200)  
         self.mapping_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         mapping_layout.addWidget(self.mapping_table)
         mapping_group.setLayout(mapping_layout)
@@ -660,6 +686,19 @@ class UniversalSender(QMainWindow):
             if self.normalize_placeholder_name(key) == requested_token:
                 return indices
         return []
+
+    def get_placeholder_signature_name(self, placeholder):
+        """Resolve a mapped signature name even when placeholder keys use different wrappers."""
+        if not placeholder:
+            return ""
+        if placeholder in self.placeholder_to_signature:
+            return self.placeholder_to_signature.get(placeholder, "")
+
+        requested_token = self.normalize_placeholder_name(placeholder)
+        for key, signature_name in self.placeholder_to_signature.items():
+            if self.normalize_placeholder_name(key) == requested_token:
+                return signature_name
+        return ""
 
     def refresh_formatting_placeholder_options(self):
         """Refresh placeholder and target-column selectors for formatting tab."""
@@ -1029,12 +1068,15 @@ class UniversalSender(QMainWindow):
                 return settings
         return None
 
-    def process_template_placeholders(self, template, row_data):
+    def process_template_placeholders(self, template, row_data, include_inline_images=False):
         if not template:
-            return template
+            return (template, []) if include_inline_images else template
         if not self.headers or row_data is None:
             logger.warning("No headers or row data provided to process_template_placeholders")
-            return template
+            return (template, []) if include_inline_images else template
+
+        inline_images = []
+        inline_image_keys = set()
 
         # Match all supported placeholder wrappers while preserving exact token text in template.
         placeholder_pattern = re.compile(
@@ -1045,6 +1087,34 @@ class UniversalSender(QMainWindow):
             raw_placeholder = match.group(0)
             token = self.normalize_placeholder_name(raw_placeholder)
             if not token:
+                return raw_placeholder
+
+            # NEW: Check if placeholder has a signature mapping
+            signature_name = self.get_placeholder_signature_name(token)
+            if signature_name:
+                if not self.signatures_list:
+                    try:
+                        self.load_signatures(quiet=True)
+                    except Exception as e:
+                        logger.warning(f"Could not auto-load signatures during placeholder replacement: {e}")
+                # Find the signature content
+                for sig in self.signatures_list:
+                    if sig['name'] == signature_name:
+                        sig_content = sig['content']
+                        signature_inline_images = sig.get('inline_images', [])
+                        for image_data in signature_inline_images:
+                            image_path = str(image_data.get('path', '')).strip()
+                            image_cid = str(image_data.get('cid', '')).strip()
+                            if not image_path or not image_cid:
+                                continue
+                            key = (image_path.lower(), image_cid.lower())
+                            if key not in inline_image_keys:
+                                inline_image_keys.add(key)
+                                inline_images.append({'path': image_path, 'cid': image_cid})
+                        logger.debug(f"Replaced signature placeholder '{token}' with '{signature_name}'")
+                        return sig_content
+                # If signature not found, log warning
+                logger.warning(f"Signature '{signature_name}' not found for placeholder '{token}'")
                 return raw_placeholder
 
             # Primary path: use explicit placeholder-to-columns mapping.
@@ -1087,6 +1157,8 @@ class UniversalSender(QMainWindow):
 
         processed_template = placeholder_pattern.sub(replace_match, template)
         logger.debug("Template placeholder processing complete")
+        if include_inline_images:
+            return processed_template, inline_images
         return processed_template
     def create_send_tab(self) -> QWidget:
         widget = QWidget()
@@ -1263,6 +1335,8 @@ class UniversalSender(QMainWindow):
         if not self.email_accounts_loaded:
             self.load_email_accounts()
             self.email_accounts_loaded = True
+        if not self.signatures_loaded:
+            self.load_signatures(quiet=True)
         self.tabs.setCurrentIndex(0)
     def on_tab_clicked(self, index):
         """Handle tab click navigation"""
@@ -1273,6 +1347,8 @@ class UniversalSender(QMainWindow):
         # Reload email accounts when switching to Send tab (index 4)
         if index == 4 and hasattr(self, 'account_combo'):
             self.load_email_accounts()
+        if index == 2 and hasattr(self, 'signature_status_label') and not self.signatures_loaded:
+            self.load_signatures(quiet=True)
         
         # Update mapping table when switching to Mapping tab (index 2)
         if index == 2 and hasattr(self, 'mapping_table'):
@@ -1557,6 +1633,14 @@ The program will now use these settings for extracting email addresses."""
             return
         self.mapping_table.setRowCount(len(self.placeholders))
         suggestions = PlaceholderExtractor.suggest_mappings(self.placeholders, self.headers)
+        
+        # Update signature status label
+        if hasattr(self, 'signature_status_label'):
+            if self.signatures_list:
+                self.signature_status_label.setText(f"✓ {len(self.signatures_list)} signature(s) loaded")
+            else:
+                self.signature_status_label.setText("No signatures loaded yet")
+        
         for row, placeholder in enumerate(self.placeholders):
             placeholder_item = QTableWidgetItem(placeholder)
             placeholder_item.setFlags(Qt.ItemIsEnabled)
@@ -1572,8 +1656,8 @@ The program will now use these settings for extracting email addresses."""
             columns_display = QLineEdit()
             columns_display.setReadOnly(True)
             columns_display.setMinimumHeight(25)
-            columns_display.setMinimumWidth(160)
-            columns_display.setMaximumWidth(160)
+            columns_display.setMinimumWidth(140)
+            columns_display.setMaximumWidth(140)
             
             # Display assigned columns
             if placeholder in self.placeholder_to_columns:
@@ -1590,7 +1674,7 @@ The program will now use these settings for extracting email addresses."""
             # Add button to select columns
             select_btn = QPushButton("Select Column(s)")
             select_btn.setMinimumHeight(25)
-            select_btn.setMaximumWidth(130)
+            select_btn.setMaximumWidth(120)
             select_btn.setStyleSheet(get_button_style('default'))
             select_btn.clicked.connect(lambda checked, p=placeholder: self.show_column_selector_for_placeholder(p))
             
@@ -1599,6 +1683,24 @@ The program will now use these settings for extracting email addresses."""
             container_layout.addStretch()
             
             self.mapping_table.setCellWidget(row, 1, container_widget)
+            
+            # Signature selection - NEW COLUMN
+            signature_combo = QComboBox()
+            signature_combo.addItem("-- None --")
+            for sig in self.signatures_list:
+                signature_combo.addItem(sig['name'], sig['name'])
+            
+            # Set current selection if exists
+            signature_name = self.get_placeholder_signature_name(placeholder)
+            if signature_name:
+                index = signature_combo.findData(signature_name)
+                if index >= 0:
+                    signature_combo.setCurrentIndex(index)
+            
+            signature_combo.currentTextChanged.connect(
+                lambda text, p=placeholder: self.on_signature_selected(p, text)
+            )
+            self.mapping_table.setCellWidget(row, 2, signature_combo)
             
             # Show sample data
             sample_data = ""
@@ -1616,11 +1718,12 @@ The program will now use these settings for extracting email addresses."""
             
             sample_item = QTableWidgetItem(sample_data)
             sample_item.setFlags(Qt.ItemIsEnabled)
-            self.mapping_table.setItem(row, 2, sample_item)
+            self.mapping_table.setItem(row, 3, sample_item)
         
-        self.mapping_table.setColumnWidth(0, 200)  
-        self.mapping_table.setColumnWidth(1, 350)  
-        self.mapping_table.setColumnWidth(2, 580)  
+        self.mapping_table.setColumnWidth(0, 130)  
+        self.mapping_table.setColumnWidth(1, 180)  
+        self.mapping_table.setColumnWidth(2, 140)  
+        self.mapping_table.setColumnWidth(3, 200)  
         self.mapping_table.resizeRowsToContents()
         if hasattr(self, 'format_placeholder_combo'):
             self.refresh_formatting_placeholder_options()
@@ -1688,6 +1791,23 @@ The program will now use these settings for extracting email addresses."""
                     del self.column_mapping[placeholder]
                 self.update_mapping_table()
     
+    def on_signature_selected(self, placeholder, signature_name):
+        """Handle signature selection for a placeholder"""
+        normalized_placeholder = self.normalize_placeholder_name(placeholder)
+        if signature_name == "-- None --" or not signature_name:
+            # Remove signature mapping
+            removed = False
+            for key in list(self.placeholder_to_signature.keys()):
+                if self.normalize_placeholder_name(key) == normalized_placeholder:
+                    del self.placeholder_to_signature[key]
+                    removed = True
+            if removed:
+                logger.info(f"Removed signature mapping for placeholder: {placeholder}")
+        else:
+            # Store signature selection
+            self.placeholder_to_signature[normalized_placeholder] = signature_name
+            logger.info(f"Mapped signature '{signature_name}' to placeholder: {placeholder}")
+    
     def on_account_changed(self, index):
         """Log when user changes the selected account"""
         if index >= 0 and index < len(self.email_accounts_list):
@@ -1749,6 +1869,35 @@ The program will now use these settings for extracting email addresses."""
             self.email_accounts_list = []
             self.email_accounts = []
         self.update_send_summary()
+    
+    def load_signatures(self, force=False, quiet=False):
+        """Load Outlook signatures - called from mapping tab or during startup"""
+        if self.signatures_loaded and self.signatures_list and not force:
+            return
+        
+        try:
+            detected_signatures = EmailSender.get_outlook_signatures()
+            self.signatures_list = detected_signatures.copy()
+            self.signatures_loaded = True
+            
+            logger.info(f"\n{'='*60}")
+            logger.info(f"DETECTED SIGNATURES:")
+            for idx, sig in enumerate(self.signatures_list):
+                logger.info(f"  [{idx}] {sig['name']} ({len(sig['content'])} chars)")
+            logger.info(f"{'='*60}\n")
+            
+            # Update mapping table to include signature options
+            self.update_mapping_table()
+            
+        except Exception as e:
+            logger.error(f"Error loading signatures: {e}")
+            if not quiet:
+                QMessageBox.warning(self, "Signature Loading Error", 
+                                  f"Could not load signatures:\n{e}")
+            self.signatures_list = []
+            if not force:
+                self.signatures_loaded = False
+    
     def update_send_summary(self, *args):
         if not self.imported_data:
             if hasattr(self, 'summary_label'):
@@ -1941,12 +2090,18 @@ The program will now use these settings for extracting email addresses."""
                         row_data.append(recipient.get(header, ""))
                     
                     # Use process_template_placeholders which handles multiple columns
-                    email_body = self.process_template_placeholders(template, row_data)
+                    email_body, inline_images = self.process_template_placeholders(
+                        template,
+                        row_data,
+                        include_inline_images=True
+                    )
                     email_subject = self.process_template_placeholders(subject, row_data)
                     
                     processed_recipient = recipient.copy()
                     processed_recipient['_processed_template'] = email_body
                     processed_recipient['_processed_subject'] = email_subject
+                    if inline_images:
+                        processed_recipient['_inline_images'] = inline_images
                     processed_recipients.append(processed_recipient)
                 
                 logger.info(f"Sending {len(processed_recipients)} emails from: {sender_email}")

@@ -6,6 +6,9 @@ import os
 import sys
 import subprocess
 import time
+import html as html_lib
+import re
+from urllib.parse import unquote
 from typing import Dict, Any, List, Optional
 from .constants import (
     OUTLOOK_PROCESS_NAME,
@@ -35,6 +38,167 @@ class EmailService:
     """Handles email sending via Microsoft Outlook"""
     
     _outlook_instance = None
+
+    @staticmethod
+    def _prepare_html_body(body_text: str) -> str:
+        """Preserve plain-text spacing in mixed text+HTML bodies.
+
+        When signature HTML is injected into a mostly plain template, converting the
+        whole body as raw HTML drops plain-text newlines/tabs. This method converts
+        whitespace only in text fragments and keeps HTML tags untouched.
+        """
+        if body_text is None:
+            return ""
+
+        body_str = str(body_text)
+        if not body_str:
+            return ""
+
+        parts = re.split(r'(<[^>]+>)', body_str)
+        has_html = any(part.startswith('<') and part.endswith('>') for part in parts)
+
+        if not has_html:
+            return (
+                body_str
+                .replace('&', '&amp;')
+                .replace('<', '&lt;')
+                .replace('>', '&gt;')
+                .replace('\t', '&nbsp;&nbsp;&nbsp;&nbsp;')
+                .replace('\r\n', '\n')
+                .replace('\r', '\n')
+                .replace('\n', '<br>')
+            )
+
+        converted_parts = []
+        for part in parts:
+            if not part:
+                continue
+            if part.startswith('<') and part.endswith('>'):
+                converted_parts.append(part)
+            else:
+                if not part.strip() or part.strip().lower() in {'&nbsp;', '&#160;'}:
+                    continue
+                converted_parts.append(
+                    part
+                    .replace('&', '&amp;')
+                    .replace('<', '&lt;')
+                    .replace('>', '&gt;')
+                    .replace('&nbsp;', ' ')
+                    .replace('&#160;', ' ')
+                    .replace('\u00A0', ' ')
+                    .replace('\t', '&nbsp;&nbsp;&nbsp;&nbsp;')
+                    .replace('\r\n', '\n')
+                    .replace('\r', '\n')
+                    .replace('\n', '<br>')
+                )
+        return ''.join(converted_parts)
+
+    @staticmethod
+    def _prepare_signature_inline_images(raw_html: str, signature_dir: str, signature_name: str) -> Dict[str, Any]:
+        """Convert local signature image references to CID references and collect inline image metadata."""
+        if not raw_html:
+            return {'content': '', 'inline_images': []}
+
+        inline_images = []
+        path_to_cid = {}
+
+        def replace_image_source(match):
+            prefix = match.group(1)
+            source = match.group(2).strip()
+            suffix = match.group(3)
+
+            if source.lower().startswith(("http://", "https://", "cid:", "data:")):
+                return match.group(0)
+
+            normalized_source = unquote(html_lib.unescape(source))
+            normalized_source = normalized_source.replace("/", os.sep).replace("\\", os.sep)
+            candidate_path = os.path.normpath(os.path.join(signature_dir, normalized_source))
+
+            if not os.path.exists(candidate_path):
+                candidate_path = os.path.normpath(os.path.join(signature_dir, os.path.basename(normalized_source)))
+
+            if not os.path.exists(candidate_path):
+                logger.warning(f"Signature image not found: {source} (base: {signature_dir})")
+                return match.group(0)
+
+            normalized_path_key = os.path.normcase(candidate_path)
+            if normalized_path_key not in path_to_cid:
+                safe_name = re.sub(r'[^A-Za-z0-9]+', '-', signature_name or 'signature').strip('-').lower() or 'signature'
+                cid = f"{safe_name}-{len(path_to_cid) + 1}@inline"
+                path_to_cid[normalized_path_key] = cid
+                inline_images.append({'path': candidate_path, 'cid': cid})
+
+            cid_value = path_to_cid[normalized_path_key]
+            return f'{prefix}cid:{cid_value}{suffix}'
+
+        updated_html = re.sub(
+            r'(<img[^>]+src=["\'])([^"\']+)(["\'][^>]*>)',
+            replace_image_source,
+            raw_html,
+            flags=re.IGNORECASE,
+        )
+        return {'content': updated_html, 'inline_images': inline_images}
+
+    @staticmethod
+    def _extract_signature_body_html(raw_html: str, signature_dir: str = "", signature_name: str = "") -> Dict[str, Any]:
+        """Extract the HTML body from an Outlook signature file and prepare CID image references."""
+        if not raw_html:
+            return {'content': '', 'inline_images': []}
+
+        body_match = re.search(r"<body[^>]*>(.*?)</body>", raw_html, re.IGNORECASE | re.DOTALL)
+        if body_match:
+            raw_html = body_match.group(1)
+
+        # Remove Microsoft Office/Word wrapper artifacts that can break rendering when injected as a fragment.
+        raw_html = re.sub(r"<!--\[if[\s\S]*?<!\[endif\]-->", "", raw_html, flags=re.IGNORECASE)
+        raw_html = re.sub(r"<style[\s\S]*?</style>", "", raw_html, flags=re.IGNORECASE)
+        raw_html = re.sub(r"<xml[\s\S]*?</xml>", "", raw_html, flags=re.IGNORECASE)
+        raw_html = re.sub(r"<link[^>]*>", "", raw_html, flags=re.IGNORECASE)
+        raw_html = re.sub(r"<meta[^>]*>", "", raw_html, flags=re.IGNORECASE)
+        raw_html = re.sub(r"</?(?:o|v|w|m):[^>]*>", "", raw_html, flags=re.IGNORECASE)
+        raw_html = re.sub(r"<p\b[^>]*>\s*(?:&nbsp;|&#160;|\u00A0|\s)*</p>", "", raw_html, flags=re.IGNORECASE)
+        raw_html = re.sub(r"<span\b[^>]*mso-spacerun:yes[^>]*>\s*(?:&nbsp;|&#160;|\u00A0|\s)*</span>", "", raw_html, flags=re.IGNORECASE)
+        raw_html = re.sub(r"<span\b[^>]*>\s*(?:&nbsp;|&#160;|\u00A0|\s)*</span>", "", raw_html, flags=re.IGNORECASE)
+
+        inline_images = []
+        if signature_dir:
+            prepared = EmailService._prepare_signature_inline_images(raw_html, signature_dir, signature_name)
+            raw_html = prepared.get('content', raw_html)
+            inline_images = prepared.get('inline_images', [])
+
+        # Remove namespace attributes from surviving tags.
+        raw_html = re.sub(r"\s+xmlns(?::\w+)?=\"[^\"]*\"", "", raw_html, flags=re.IGNORECASE)
+        raw_html = re.sub(r"\s+xmlns(?::\w+)?='[^']*'", "", raw_html, flags=re.IGNORECASE)
+
+        return {
+            'content': raw_html.strip(),
+            'inline_images': inline_images,
+        }
+
+    @staticmethod
+    def _load_signature_file(file_path: str) -> Dict[str, Any]:
+        """Load and normalize a signature file into an HTML fragment or plain text."""
+        content = ""
+        for encoding in ("utf-8-sig", "utf-8", "cp1252", "latin-1"):
+            try:
+                with open(file_path, 'r', encoding=encoding) as f:
+                    content = f.read().strip()
+                break
+            except Exception:
+                content = ""
+
+        if not content:
+            with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+                content = f.read().strip()
+
+        signature_name = os.path.splitext(os.path.basename(file_path))[0]
+        if file_path.lower().endswith(('.htm', '.html')):
+            return EmailService._extract_signature_body_html(content, os.path.dirname(file_path), signature_name)
+
+        return {
+            'content': content,
+            'inline_images': [],
+        }
 
     @staticmethod
     def _resolve_send_account(outlook: Any, sender_email: str, preferred_account: Any = None) -> Any:
@@ -337,6 +501,105 @@ class EmailService:
         except Exception as e:
             logger.error(f"Critical error loading accounts: {e}")
             raise OutlookAccountError(str(e))
+
+    @staticmethod
+    def get_outlook_signatures() -> List[Dict[str, str]]:
+        """
+        Get list of email signatures available in Outlook.
+        
+        Signatures are stored in user's signature folder (Windows AppData).
+        Supports .txt and .htm/.html signature files.
+        
+        Returns:
+            List of signature dictionaries with 'name' and 'content' keys
+            
+        Raises:
+            OutlookError: If signature retrieval fails
+        """
+        signatures = []
+        
+        try:
+            logger.info("Loading Outlook signatures...")
+            
+            # Signature files are stored in AppData\Roaming\Microsoft\Signatures
+            signatures_folder = os.path.expanduser(
+                r"~\AppData\Roaming\Microsoft\Signatures"
+            )
+            
+            if not os.path.exists(signatures_folder):
+                logger.warning(f"Signatures folder not found: {signatures_folder}")
+                raise OutlookError(f"Signatures folder not found at {signatures_folder}")
+            
+            logger.info(f"Scanning signatures folder: {signatures_folder}")
+            
+            # Scan for signature files (.txt, .htm, .html)
+            # Outlook stores the same signature in multiple companion files; keep only one entry per name.
+            best_signatures = {}
+            priority_map = {
+                '.txt': 1,
+                '.htm': 2,
+                '.html': 2,
+            }
+            for filename in os.listdir(signatures_folder):
+                file_path = os.path.join(signatures_folder, filename)
+                
+                # Skip directories and hidden files
+                if os.path.isdir(file_path) or filename.startswith('.'):
+                    continue
+                
+                # Support .txt, .htm, .html files
+                if filename.lower().endswith(('.txt', '.htm', '.html')):
+                    try:
+                        # Extract signature name (filename without extension)
+                        sig_name = os.path.splitext(filename)[0]
+                        extension = os.path.splitext(filename)[1].lower()
+                        priority = priority_map.get(extension, 0)
+                        
+                        # Read signature content
+                        signature_payload = EmailService._load_signature_file(file_path)
+                        content = signature_payload.get('content', '')
+                        inline_images = signature_payload.get('inline_images', [])
+                        
+                        if content:
+                            current_entry = best_signatures.get(sig_name)
+                            if current_entry is None or priority >= current_entry['priority']:
+                                best_signatures[sig_name] = {
+                                    'name': sig_name,
+                                    'content': content,
+                                    'inline_images': inline_images,
+                                    'filename': filename,
+                                    'priority': priority,
+                                }
+                                logger.info(f"✓ Signature candidate: {sig_name} ({filename}, {len(content)} chars)")
+                        else:
+                            logger.debug(f"Skipped empty signature: {sig_name}")
+                    
+                    except Exception as e:
+                        logger.warning(f"Error reading signature '{filename}': {e}")
+                        continue
+            
+            signatures = [
+                {
+                    'name': entry['name'],
+                    'content': entry['content'],
+                    'inline_images': entry.get('inline_images', []),
+                    'filename': entry['filename']
+                }
+                for entry in sorted(best_signatures.values(), key=lambda item: item['name'].lower())
+            ]
+
+            if not signatures:
+                logger.warning("No signatures found in Outlook signatures folder")
+                raise OutlookError("No signatures found")
+            
+            logger.info(f"✓ Successfully loaded {len(signatures)} signature(s)")
+            return signatures
+        
+        except OutlookError:
+            raise
+        except Exception as e:
+            logger.error(f"Critical error loading signatures: {e}")
+            raise OutlookError(f"Failed to load signatures: {e}")
     
     @staticmethod
     def send_emails(recipients: List[Dict[str, Any]], 
@@ -463,8 +726,30 @@ class EmailService:
                     else:
                         body_text = template
                         logger.debug(f"Using default template ({len(body_text)} chars)")
-                    
-                    mail_item.HTMLBody = body_text.replace('\n', '<br>')
+
+                    # olFormatHTML = 2
+                    mail_item.BodyFormat = 2
+                    mail_item.HTMLBody = EmailService._prepare_html_body(body_text)
+
+                    # Add inline signature images (cid attachments)
+                    inline_images = recipient_data.get('_inline_images', [])
+                    for image_data in inline_images:
+                        image_path = str(image_data.get('path', '')).strip()
+                        image_cid = str(image_data.get('cid', '')).strip()
+                        if not image_path or not image_cid:
+                            continue
+                        if not os.path.exists(image_path):
+                            logger.warning(f"Inline signature image path not found: {image_path}")
+                            continue
+                        try:
+                            attachment = mail_item.Attachments.Add(image_path)
+                            prop = attachment.PropertyAccessor
+                            # PR_ATTACH_CONTENT_ID (PT_STRING8/PT_UNICODE)
+                            prop.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x3712001F", image_cid)
+                            # PR_ATTACHMENT_HIDDEN
+                            prop.SetProperty("http://schemas.microsoft.com/mapi/proptag/0x7FFE000B", True)
+                        except Exception as image_err:
+                            logger.warning(f"Could not add inline signature image '{image_path}': {image_err}")
                     
                     # Add attachments
                     if attachments:
