@@ -41,11 +41,10 @@ class EmailService:
 
     @staticmethod
     def _prepare_html_body(body_text: str) -> str:
-        """Preserve plain-text spacing in mixed text+HTML bodies.
-
-        When signature HTML is injected into a mostly plain template, converting the
-        whole body as raw HTML drops plain-text newlines/tabs. This method converts
-        whitespace only in text fragments and keeps HTML tags untouched.
+        """Preserve plain-text spacing in mixed text+HTML bodies while safeguarding signature HTML.
+        
+        This converts newlines to <br> for plain text parts but ignores text inside HTML.
+        It respects the <!--SIG_START--> marker to pass signature blocks 100% untouched.
         """
         if body_text is None:
             return ""
@@ -54,44 +53,47 @@ class EmailService:
         if not body_str:
             return ""
 
-        parts = re.split(r'(<[^>]+>)', body_str)
-        has_html = any(part.startswith('<') and part.endswith('>') for part in parts)
+        # If it already seems to have complete HTML structure and no signature markers, pass through
+        if "<html" in body_str.lower() and "<body" in body_str.lower() and "<!--SIG_START-->" not in body_str:
+            return body_str
 
-        if not has_html:
-            return (
-                body_str
-                .replace('&', '&amp;')
-                .replace('<', '&lt;')
-                .replace('>', '&gt;')
-                .replace('\t', '&nbsp;&nbsp;&nbsp;&nbsp;')
-                .replace('\r\n', '\n')
-                .replace('\r', '\n')
-                .replace('\n', '<br>')
-            )
-
-        converted_parts = []
-        for part in parts:
-            if not part:
-                continue
-            if part.startswith('<') and part.endswith('>'):
-                converted_parts.append(part)
+        # Split by the signature markers added in mail_merge_sender.py
+        sig_parts = re.split(r'(<!--SIG_START-->.*?<!--SIG_END-->)', body_str, flags=re.DOTALL)
+        
+        final_html = []
+        
+        for sig_part in sig_parts:
+            if sig_part.startswith('<!--SIG_START-->') and sig_part.endswith('<!--SIG_END-->'):
+                # This is a signature block. Pass it EXACTLY as is, stripping only the markers.
+                clean_sig = sig_part[16:-14]
+                final_html.append(clean_sig)
             else:
-                if not part.strip() or part.strip().lower() in {'&nbsp;', '&#160;'}:
+                if not sig_part:
                     continue
-                converted_parts.append(
-                    part
-                    .replace('&', '&amp;')
-                    .replace('<', '&lt;')
-                    .replace('>', '&gt;')
-                    .replace('&nbsp;', ' ')
-                    .replace('&#160;', ' ')
-                    .replace('\u00A0', ' ')
-                    .replace('\t', '&nbsp;&nbsp;&nbsp;&nbsp;')
-                    .replace('\r\n', '\n')
-                    .replace('\r', '\n')
-                    .replace('\n', '<br>')
-                )
-        return ''.join(converted_parts)
+                
+                # This is non-signature text (user template, subject placeholders, etc).
+                # We apply the standard whitespace-to-HTML conversion, preserving any other HTML tags.
+                tag_parts = re.split(r'(<[^>]+>)', sig_part)
+                for part in tag_parts:
+                    if not part:
+                        continue
+                    if part.startswith('<') and part.endswith('>'):
+                        final_html.append(part)
+                    else:
+                        # Convert plain text spacing into explicit HTML spacing
+                        converted = (
+                            part
+                            .replace('&', '&amp;')
+                            .replace('<', '&lt;')
+                            .replace('>', '&gt;')
+                            .replace('\t', '&nbsp;&nbsp;&nbsp;&nbsp;')
+                            .replace('\r\n', '\n')
+                            .replace('\r', '\n')
+                            .replace('\n', '<br>')
+                        )
+                        final_html.append(converted)
+
+        return ''.join(final_html)
 
     @staticmethod
     def _prepare_signature_inline_images(raw_html: str, signature_dir: str, signature_name: str) -> Dict[str, Any]:
@@ -141,34 +143,29 @@ class EmailService:
 
     @staticmethod
     def _extract_signature_body_html(raw_html: str, signature_dir: str = "", signature_name: str = "") -> Dict[str, Any]:
-        """Extract the HTML body from an Outlook signature file and prepare CID image references."""
+        """Extract the HTML body and styles from an Outlook signature file."""
         if not raw_html:
             return {'content': '', 'inline_images': []}
 
+        # Extract styles from head to preserve formatting
+        styles = ""
+        style_matches = re.finditer(r"<style[^>]*>.*?</style>", raw_html, re.IGNORECASE | re.DOTALL)
+        for match in style_matches:
+            styles += match.group(0) + "\n"
+
+        # Try to extract just the body to avoid duplicate html/head/body tags if we are injecting into another HTML doc,
+        # but keep as much formatting as possible.
         body_match = re.search(r"<body[^>]*>(.*?)</body>", raw_html, re.IGNORECASE | re.DOTALL)
         if body_match:
-            raw_html = body_match.group(1)
-
-        # Remove Microsoft Office/Word wrapper artifacts that can break rendering when injected as a fragment.
-        raw_html = re.sub(r"<!--\[if[\s\S]*?<!\[endif\]-->", "", raw_html, flags=re.IGNORECASE)
-        raw_html = re.sub(r"<style[\s\S]*?</style>", "", raw_html, flags=re.IGNORECASE)
-        raw_html = re.sub(r"<xml[\s\S]*?</xml>", "", raw_html, flags=re.IGNORECASE)
-        raw_html = re.sub(r"<link[^>]*>", "", raw_html, flags=re.IGNORECASE)
-        raw_html = re.sub(r"<meta[^>]*>", "", raw_html, flags=re.IGNORECASE)
-        raw_html = re.sub(r"</?(?:o|v|w|m):[^>]*>", "", raw_html, flags=re.IGNORECASE)
-        raw_html = re.sub(r"<p\b[^>]*>\s*(?:&nbsp;|&#160;|\u00A0|\s)*</p>", "", raw_html, flags=re.IGNORECASE)
-        raw_html = re.sub(r"<span\b[^>]*mso-spacerun:yes[^>]*>\s*(?:&nbsp;|&#160;|\u00A0|\s)*</span>", "", raw_html, flags=re.IGNORECASE)
-        raw_html = re.sub(r"<span\b[^>]*>\s*(?:&nbsp;|&#160;|\u00A0|\s)*</span>", "", raw_html, flags=re.IGNORECASE)
+            raw_html = styles + body_match.group(1)
+        else:
+            raw_html = styles + raw_html
 
         inline_images = []
         if signature_dir:
             prepared = EmailService._prepare_signature_inline_images(raw_html, signature_dir, signature_name)
             raw_html = prepared.get('content', raw_html)
             inline_images = prepared.get('inline_images', [])
-
-        # Remove namespace attributes from surviving tags.
-        raw_html = re.sub(r"\s+xmlns(?::\w+)?=\"[^\"]*\"", "", raw_html, flags=re.IGNORECASE)
-        raw_html = re.sub(r"\s+xmlns(?::\w+)?='[^']*'", "", raw_html, flags=re.IGNORECASE)
 
         return {
             'content': raw_html.strip(),

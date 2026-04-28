@@ -1112,7 +1112,8 @@ class UniversalSender(QMainWindow):
                                 inline_image_keys.add(key)
                                 inline_images.append({'path': image_path, 'cid': image_cid})
                         logger.debug(f"Replaced signature placeholder '{token}' with '{signature_name}'")
-                        return sig_content
+                        # Wrap signature in a special marker to protect it during HTML prep
+                        return f"<!--SIG_START-->{sig_content}<!--SIG_END-->"
                 # If signature not found, log warning
                 logger.warning(f"Signature '{signature_name}' not found for placeholder '{token}'")
                 return raw_placeholder
