@@ -341,10 +341,6 @@ class UniversalSender(QMainWindow):
         self.mapping_table.setStyleSheet(get_table_style())
         self.mapping_table.setAlternatingRowColors(True)
         self.mapping_table.horizontalHeader().setStretchLastSection(False)
-        self.mapping_table.setColumnWidth(0, 130)  
-        self.mapping_table.setColumnWidth(1, 170)  
-        self.mapping_table.setColumnWidth(2, 150)  
-        self.mapping_table.setColumnWidth(3, 200)  
         self.mapping_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         mapping_layout.addWidget(self.mapping_table)
         mapping_group.setLayout(mapping_layout)
@@ -1764,8 +1760,8 @@ The program will now use these settings for extracting email addresses."""
             columns_display = QLineEdit()
             columns_display.setReadOnly(True)
             columns_display.setMinimumHeight(25)
-            columns_display.setMinimumWidth(140)
-            columns_display.setMaximumWidth(140)
+            columns_display.setMinimumWidth(80)
+            columns_display.setMaximumWidth(120)
             
             # Display assigned columns
             if placeholder in self.placeholder_to_columns:
@@ -1780,9 +1776,9 @@ The program will now use these settings for extracting email addresses."""
                 columns_display.setStyleSheet(var_theme.get_input_style() + "color: gray;")
             
             # Add button to select columns
-            select_btn = QPushButton("Select Column(s)")
+            select_btn = QPushButton("Select")
             select_btn.setMinimumHeight(25)
-            select_btn.setMaximumWidth(120)
+            select_btn.setMaximumWidth(75)
             select_btn.setStyleSheet(get_button_style('default'))
             select_btn.clicked.connect(lambda checked, p=placeholder: self.show_column_selector_for_placeholder(p))
             
@@ -1828,10 +1824,7 @@ The program will now use these settings for extracting email addresses."""
             sample_item.setFlags(Qt.ItemIsEnabled)
             self.mapping_table.setItem(row, 3, sample_item)
         
-        self.mapping_table.setColumnWidth(0, 130)  
-        self.mapping_table.setColumnWidth(1, 180)  
-        self.mapping_table.setColumnWidth(2, 140)  
-        self.mapping_table.setColumnWidth(3, 200)  
+        self.mapping_table.resizeColumnsToContents()
         self.mapping_table.resizeRowsToContents()
         if hasattr(self, 'format_placeholder_combo'):
             self.refresh_formatting_placeholder_options()
