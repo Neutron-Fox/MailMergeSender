@@ -23,7 +23,10 @@ class EmailConfig:
     email_template: str
     send_multiple_together: bool = False  # True: send one email to all addresses, False: send separate emails
     custom_validators: Optional[List[str]] = None
-    placeholder_columns: Optional[dict] = None  # NEW: Maps placeholder_name -> List[column_indices]
+    placeholder_columns: Optional[dict] = None  # Maps placeholder_name -> List[column_indices]
+    consolidate_rows_by_recipient: bool = False  # NEW: Group multiple rows by recipient email
+    consolidation_recipient_column: Optional[int] = None  # NEW: Which column identifies recipient
+    consolidation_data_columns: Optional[List[int]] = None  # NEW: Which columns to consolidate
     
     def to_dict(self):
         """Convert to dictionary for persistence"""
@@ -34,7 +37,10 @@ class EmailConfig:
             'email_template': self.email_template,
             'send_multiple_together': self.send_multiple_together,
             'custom_validators': self.custom_validators or [],
-            'placeholder_columns': self.placeholder_columns or {}  # NEW
+            'placeholder_columns': self.placeholder_columns or {},
+            'consolidate_rows_by_recipient': self.consolidate_rows_by_recipient,
+            'consolidation_recipient_column': self.consolidation_recipient_column,
+            'consolidation_data_columns': self.consolidation_data_columns or []
         }
     
     @classmethod
@@ -47,7 +53,10 @@ class EmailConfig:
             email_template=data.get('email_template', r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'),
             send_multiple_together=data.get('send_multiple_together', False),
             custom_validators=data.get('custom_validators', []),
-            placeholder_columns=data.get('placeholder_columns', {})  # NEW
+            placeholder_columns=data.get('placeholder_columns', {}),
+            consolidate_rows_by_recipient=data.get('consolidate_rows_by_recipient', False),
+            consolidation_recipient_column=data.get('consolidation_recipient_column'),
+            consolidation_data_columns=data.get('consolidation_data_columns', [])
         )
 
 
@@ -62,7 +71,7 @@ class EmailConfigurationWizard(QDialog):
         self.data = data
         self.config = None
         self.current_step = 1
-        self.max_steps = 6
+        self.max_steps = 7
         
         # State tracking (persists across step navigation)
         self.selected_email_columns = {}  # Column index -> checked state
@@ -70,6 +79,11 @@ class EmailConfigurationWizard(QDialog):
         self.send_multiple_together = True  # Default to True (Send Together), can be changed in Step 3
         self.selected_separators = {}  # Separator -> checked state
         self.template_text = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"  # Email validation regex
+        
+        # NEW: Consolidation state
+        self.consolidate_enabled = False
+        self.consolidation_recipient_column = None
+        self.consolidation_data_columns = {}  # Column index -> checked state
         
         # Widget references for current step
         self.column_checkboxes = {}
@@ -470,6 +484,119 @@ Template:             Email regex validation active
         group.setLayout(layout)
         self.content_layout.addWidget(group)
     
+    def show_step_7(self):
+        """Step 7: Consolidate multiple rows by recipient"""
+        self.clear_content()
+        self.current_step = 7
+        self.step_label.setText("Step 7/7: Consolidate Rows by Recipient")
+        self.back_btn.setEnabled(True)
+        self.next_btn.setText("✓ Finish")
+        
+        group = QGroupBox("Consolidate Multiple Rows to Same Recipient")
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+        
+        # Enable/disable consolidation
+        info_label = QLabel(
+            "If enabled, multiple rows with the same email recipient will be consolidated into one email.\n"
+            "You can choose which columns contain the data to consolidate (e.g., folder names)."
+        )
+        info_label.setWordWrap(True)
+        info_label.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 9pt;")
+        layout.addWidget(info_label)
+        
+        consolidate_checkbox = QCheckBox("Enable row consolidation by recipient")
+        consolidate_checkbox.setChecked(self.consolidate_enabled)
+        consolidate_checkbox.stateChanged.connect(self.on_consolidate_toggled)
+        layout.addWidget(consolidate_checkbox)
+        self.consolidate_checkbox = consolidate_checkbox
+        
+        # Recipient column selection
+        recipient_group = QGroupBox("Select Recipient Identifier Column")
+        recipient_layout = QVBoxLayout(recipient_group)
+        recipient_layout.setContentsMargins(8, 8, 8, 8)
+        recipient_layout.setSpacing(8)
+        
+        recipient_info = QLabel("Which column contains the recipient email address?")
+        recipient_info.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 9pt;")
+        recipient_layout.addWidget(recipient_info)
+        
+        self.recipient_column_combo = QComboBox()
+        self.recipient_column_combo.addItem("-- Select Column --", -1)
+        for idx, header in enumerate(self.headers):
+            self.recipient_column_combo.addItem(header, idx)
+        
+        if self.consolidation_recipient_column is not None and 0 <= self.consolidation_recipient_column < len(self.headers):
+            self.recipient_column_combo.setCurrentIndex(self.consolidation_recipient_column + 1)
+        
+        self.recipient_column_combo.currentIndexChanged.connect(
+            lambda: setattr(self, 'consolidation_recipient_column', self.recipient_column_combo.currentData())
+        )
+        recipient_layout.addWidget(self.recipient_column_combo)
+        recipient_group.setLayout(recipient_layout)
+        layout.addWidget(recipient_group)
+        
+        # Data columns selection
+        data_group = QGroupBox("Select Columns to Consolidate")
+        data_layout = QVBoxLayout(data_group)
+        data_layout.setContentsMargins(8, 8, 8, 8)
+        data_layout.setSpacing(8)
+        
+        data_info = QLabel(
+            "Which columns should be combined when multiple rows have the same recipient?\n"
+            "(e.g., folder names, paths, or other data to aggregate)"
+        )
+        data_info.setWordWrap(True)
+        data_info.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 9pt;")
+        data_layout.addWidget(data_info)
+        
+        # Create checkboxes for each column
+        self.consolidation_data_checkboxes = {}
+        for idx, header in enumerate(self.headers):
+            checkbox = QCheckBox(header)
+            if idx in self.consolidation_data_columns:
+                checkbox.setChecked(True)
+            self.consolidation_data_checkboxes[idx] = checkbox
+            data_layout.addWidget(checkbox)
+        
+        # Save consolidation data column selections when checkboxes change
+        for idx, checkbox in self.consolidation_data_checkboxes.items():
+            checkbox.stateChanged.connect(
+                lambda state, i=idx: self._update_consolidation_data_columns()
+            )
+        
+        data_layout.addStretch()
+        data_group.setLayout(data_layout)
+        layout.addWidget(data_group)
+        
+        # Enable/disable data columns based on consolidation checkbox
+        self._update_consolidation_ui_state()
+        
+        layout.addStretch()
+        group.setLayout(layout)
+        self.content_layout.addWidget(group)
+    
+    def on_consolidate_toggled(self, state):
+        """Handle consolidation checkbox toggle"""
+        self.consolidate_enabled = (state == 2)  # Qt.Checked = 2
+        self._update_consolidation_ui_state()
+    
+    def _update_consolidation_ui_state(self):
+        """Enable/disable consolidation UI elements based on consolidation checkbox"""
+        if hasattr(self, 'recipient_column_combo'):
+            self.recipient_column_combo.setEnabled(self.consolidate_enabled)
+        if hasattr(self, 'consolidation_data_checkboxes'):
+            for checkbox in self.consolidation_data_checkboxes.values():
+                checkbox.setEnabled(self.consolidate_enabled)
+    
+    def _update_consolidation_data_columns(self):
+        """Update consolidation_data_columns from checkbox states"""
+        if hasattr(self, 'consolidation_data_checkboxes'):
+            self.consolidation_data_columns = {
+                idx: cb.isChecked() for idx, cb in self.consolidation_data_checkboxes.items()
+            }
+    
     def build_configuration(self) -> EmailConfig:
         """Build EmailConfig from current step selections"""
         # Get selected columns from saved state
@@ -486,12 +613,18 @@ Template:             Email regex validation active
         # Get template from saved state (not from widget which may be deleted)
         template = self.template_text
         
+        # NEW: Get consolidation settings
+        consolidation_data_columns = [col for col, checked in self.consolidation_data_columns.items() if checked]
+        
         return EmailConfig(
             email_columns=email_columns,
             multiple_emails_per_row=multiple_emails,
             send_multiple_together=self.send_multiple_together,
             separator_chars=separators,
-            email_template=template
+            email_template=template,
+            consolidate_rows_by_recipient=self.consolidate_enabled,
+            consolidation_recipient_column=self.consolidation_recipient_column,
+            consolidation_data_columns=consolidation_data_columns
         )
     
     def extract_emails_preview(self) -> List[str]:
@@ -555,6 +688,8 @@ Template:             Email regex validation active
         elif self.current_step == 5:
             self.show_step_6()
         elif self.current_step == 6:
+            self.show_step_7()
+        elif self.current_step == 7:
             # Apply configuration and close
             self.config = self.build_configuration()
             self.configuration_complete.emit(self.config)
@@ -572,6 +707,8 @@ Template:             Email regex validation active
             self.show_step_4()
         elif self.current_step == 6:
             self.show_step_5()
+        elif self.current_step == 7:
+            self.show_step_6()
     
     def on_template_mode_changed(self, checkbox):
         """Handle template mode change"""
