@@ -4,6 +4,8 @@ Provides centralized logging setup with file rotation and console output.
 """
 import logging
 import os
+import sys
+import io
 from logging.handlers import RotatingFileHandler
 
 from .constants import (
@@ -49,8 +51,16 @@ class LoggerSetup:
         file_handler.setFormatter(formatter)
         root_logger.addHandler(file_handler)
         
-        # Console handler
-        console_handler = logging.StreamHandler()
+        # Console handler with UTF-8 encoding to support unicode characters
+        # Wrap stdout with UTF-8 encoding to handle unicode characters like ✓
+        try:
+            if sys.stdout.encoding.lower() != 'utf-8':
+                # Reconfigure stdout to use UTF-8 encoding with error handling
+                sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+        except (AttributeError, TypeError):
+            pass
+        
+        console_handler = logging.StreamHandler(sys.stdout)
         console_handler.setLevel(getattr(logging, LOG_LEVEL))
         console_handler.setFormatter(formatter)
         root_logger.addHandler(console_handler)

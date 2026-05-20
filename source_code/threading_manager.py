@@ -50,7 +50,7 @@ class WorkerThread(QThread):
             else:
                 self.finished.emit(True, "Operation completed", result)
             
-            logger.info(f"✓ Operation completed: {self.operation.__name__}")
+            logger.info(f"[OK] Operation completed: {self.operation.__name__}")
         
         except Exception as e:
             error_msg = f"Error in {self.operation.__name__}: {str(e)}"

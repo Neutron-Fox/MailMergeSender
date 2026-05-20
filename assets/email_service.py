@@ -377,7 +377,7 @@ class EmailService:
             
             # Verify it started
             if EmailService.check_outlook_running():
-                logger.info("✓ Outlook started successfully")
+                logger.info("[OK] Outlook started successfully")
                 return True
             else:
                 logger.warning("Outlook process not detected after startup")
@@ -417,7 +417,7 @@ class EmailService:
                 try:
                     # Test if cached instance is still valid
                     _ = EmailService._outlook_instance.Version
-                    logger.info("✓ Reusing cached Outlook instance")
+                    logger.info("[OK] Reusing cached Outlook instance")
                     outlook = EmailService._outlook_instance
                 except Exception:
                     logger.warning("Cached instance invalid, creating new connection")
@@ -428,7 +428,7 @@ class EmailService:
                     logger.info("Creating new Outlook connection...")
                     outlook = win32com.client.Dispatch("Outlook.Application")
                     version = outlook.Version
-                    logger.info(f"✓ Connected to Outlook (version {version})")
+                    logger.info(f"[OK] Connected to Outlook (version {version})")
                     EmailService._outlook_instance = outlook
                 except Exception as e:
                     logger.error(f"Failed to connect to Outlook: {e}")
@@ -475,7 +475,7 @@ class EmailService:
                                     'account_object': account,
                                     'display_name': account_name
                                 })
-                                logger.info(f"✓ Account {i}: {email_address} ({account_name})")
+                                logger.info(f"[OK] Account {i}: {email_address} ({account_name})")
                             except Exception as e:
                                 logger.warning(f"✗ Account {i}: Invalid email - {e}")
                         else:
@@ -490,7 +490,7 @@ class EmailService:
             if not accounts:
                 raise NoOutlookAccountsError()
             
-            logger.info(f"✓ Successfully loaded {len(accounts)} account(s)")
+            logger.info(f"[OK] Successfully loaded {len(accounts)} account(s)")
             return accounts
         
         except (NoOutlookAccountsError, MissingDependencyError, OutlookConnectionError, OutlookAccountError):
@@ -567,7 +567,7 @@ class EmailService:
                                     'filename': filename,
                                     'priority': priority,
                                 }
-                                logger.info(f"✓ Signature candidate: {sig_name} ({filename}, {len(content)} chars)")
+                                logger.info(f"[OK] Signature candidate: {sig_name} ({filename}, {len(content)} chars)")
                         else:
                             logger.debug(f"Skipped empty signature: {sig_name}")
                     
@@ -589,7 +589,7 @@ class EmailService:
                 logger.warning("No signatures found in Outlook signatures folder")
                 raise OutlookError("No signatures found")
             
-            logger.info(f"✓ Successfully loaded {len(signatures)} signature(s)")
+            logger.info(f"[OK] Successfully loaded {len(signatures)} signature(s)")
             return signatures
         
         except OutlookError:
@@ -768,7 +768,7 @@ class EmailService:
                     mail_item.Send()
                     logger.info(f">>> EMAIL SENT <<<\n")
                     
-                    logger.debug(f"✓ Email {i}: Sent to {'; '.join(recipient_emails)}")
+                    logger.debug(f"[OK] Email {i}: Sent to {'; '.join(recipient_emails)}")
                     sent_count += 1
                     
                     time.sleep(EMAIL_SEND_DELAY)
@@ -790,7 +790,7 @@ class EmailService:
             if failed_count > 0:
                 message += f", {failed_count} failed"
             
-            logger.info(f"✓ Email send complete: {message}")
+            logger.info(f"[OK] Email send complete: {message}")
             
             return {
                 'success': success,

@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QScrollArea, QCheckBox, QDialog, QListWidget, QListWidgetItem
 )
 from PyQt5.QtCore import Qt
-from PyQt5.QtGui import QFont
+from PyQt5.QtGui import QFont, QColor
 from .theme import var_theme, get_button_style, get_table_style
 from .email_config_wizard import EmailConfigurationWizard, EmailConfig
 from assets.import_service import ImportService
@@ -1411,16 +1411,85 @@ class UniversalSender(QMainWindow):
         self.email_config = config
         logger.info(f"Email configuration saved: columns={config.email_columns}, multiple={config.multiple_emails_per_row}")
         
+        # Apply row consolidation if enabled
+        if config.consolidate_rows_by_recipient:
+            self.consolidate_rows_by_recipient(config)
+        
+        # Update table to highlight selected email columns
+        self.highlight_email_columns()
+        
         # Show success message with configuration details
         msg = f"""Email Configuration Saved!
 
 Email Columns: {config.email_columns}
 Multiple Emails per Row: {'Yes' if config.multiple_emails_per_row else 'No'}
 Separators: {', '.join(repr(s) for s in config.separator_chars) if config.separator_chars else 'None'}
+Row Consolidation: {'Enabled' if config.consolidate_rows_by_recipient else 'Disabled'}
 
 The program will now use these settings for extracting email addresses."""
         
         QMessageBox.information(self, "Configuration Complete", msg)
+    
+    def consolidate_rows_by_recipient(self, config: EmailConfig):
+        """Consolidate multiple rows with the same recipient into single rows"""
+        if config.consolidation_recipient_column is None or config.consolidation_recipient_column >= len(self.headers):
+            logger.warning("Invalid recipient column for consolidation")
+            return
+        
+        if not config.consolidation_data_columns:
+            logger.warning("No data columns selected for consolidation")
+            return
+        
+        try:
+            recipient_col_idx = config.consolidation_recipient_column
+            data_col_indices = config.consolidation_data_columns
+            
+            # Dictionary to group rows by recipient
+            consolidated_data = {}  # recipient -> list of rows
+            
+            # Group rows by recipient
+            for row in self.imported_data:
+                if recipient_col_idx < len(row):
+                    recipient = row[recipient_col_idx]
+                    if recipient not in consolidated_data:
+                        consolidated_data[recipient] = {
+                            'first_row': row.copy(),
+                            'data_values': {col_idx: [] for col_idx in data_col_indices}
+                        }
+                    
+                    # Collect data from consolidation columns
+                    for col_idx in data_col_indices:
+                        if col_idx < len(row) and col_idx != recipient_col_idx:
+                            value = str(row[col_idx]).strip()
+                            if value and value not in consolidated_data[recipient]['data_values'][col_idx]:
+                                consolidated_data[recipient]['data_values'][col_idx].append(value)
+            
+            # Build new consolidated data list
+            new_data = []
+            for recipient, data in consolidated_data.items():
+                new_row = data['first_row'].copy()
+                
+                # Replace consolidation columns with combined values
+                for col_idx in data_col_indices:
+                    combined_value = "; ".join(data['data_values'][col_idx])
+                    if col_idx < len(new_row):
+                        new_row[col_idx] = combined_value
+                
+                new_data.append(new_row)
+            
+            # Update imported data with consolidated data
+            self.imported_data = new_data
+            self.filtered_data = self.imported_data.copy()
+            
+            # Refresh the table display
+            self.update_table_display()
+            
+            logger.info(f"Consolidated {len(consolidated_data)} unique recipients from original data")
+            self.statusBar().showMessage(f"Data consolidated: {len(consolidated_data)} unique recipients")
+        
+        except Exception as e:
+            logger.error(f"Error during row consolidation: {e}")
+            QMessageBox.warning(self, "Consolidation Error", f"Error consolidating rows: {str(e)}")
     
     def populate_data_table(self):
         if not self.imported_data or not self.headers:
@@ -1462,6 +1531,44 @@ The program will now use these settings for extracting email addresses."""
                 self.data_table.setItem(row, col + 1, item)  
         self.data_table.itemChanged.connect(self.on_checkbox_changed)
         self.data_table.resizeColumnsToContents()
+    
+    def highlight_email_columns(self):
+        """Highlight the columns selected for email extraction in the table"""
+        if not self.email_config or not hasattr(self, 'data_table'):
+            return
+        
+        # Color for email columns
+        email_header_color = var_theme.colors.get('button_primary', '#0078D4')
+        email_bg_color = var_theme.colors.get('secondary_bg', '#f0f0f0')
+        
+        # Update header styling for email columns
+        for col_idx in range(self.data_table.columnCount()):
+            header_item = self.data_table.horizontalHeaderItem(col_idx)
+            if header_item:
+                # Column 0 is the checkbox, so email column indices need +1 offset
+                actual_col_idx = col_idx - 1  # Remove the checkbox column offset
+                
+                if actual_col_idx in self.email_config.email_columns:
+                    # Highlight email columns with blue background
+                    header_item.setBackground(QColor(email_header_color))
+                    header_item.setForeground(QColor("white"))
+                    
+                    # Apply background to all cells in this column
+                    for row_idx in range(self.data_table.rowCount()):
+                        item = self.data_table.item(row_idx, col_idx)
+                        if item:
+                            item.setBackground(QColor(email_bg_color))
+                else:
+                    # Reset styling for non-email columns
+                    header_item.setBackground(QColor(var_theme.colors.get('input_bg', 'white')))
+                    header_item.setForeground(QColor(var_theme.colors.get('text_primary', 'black')))
+                    
+                    # Reset background for all cells in this column
+                    for row_idx in range(self.data_table.rowCount()):
+                        item = self.data_table.item(row_idx, col_idx)
+                        if item:
+                            item.setBackground(QColor(var_theme.colors.get('input_bg', 'white')))
+    
     def update_selection_info(self):
         checked_rows = len(self.selected_rows)
         total_filtered = len(self.filtered_data)
@@ -1988,122 +2095,6 @@ The program will now use these settings for extracting email addresses."""
         
         return emails
     
-    def consolidate_rows_by_recipient(self, recipients: list) -> list:
-        """
-        Consolidate multiple recipient entries with the same email into a single entry.
-        
-        Groups rows by recipient email and combines data from specified columns.
-        
-        Args:
-            recipients: List of recipient dictionaries
-            
-        Returns:
-            List of consolidated recipient dictionaries
-        """
-        if not self.email_config or not self.email_config.consolidate_rows_by_recipient:
-            return recipients
-        
-        if self.email_config.consolidation_recipient_column is None:
-            logger.warning("Consolidation enabled but no recipient column selected")
-            return recipients
-        
-        if not self.email_config.consolidation_data_columns:
-            logger.warning("Consolidation enabled but no data columns selected")
-            return recipients
-        
-        recipient_column_name = self.headers[self.email_config.consolidation_recipient_column]
-        logger.info(f"Consolidating rows by recipient email in column '{recipient_column_name}'")
-        
-        # Group recipients by email address
-        consolidated_dict = {}  # email -> consolidated recipient dict
-        
-        for recipient in recipients:
-            # Get recipient email
-            recipient_email = None
-            if '_recipient_email' in recipient:
-                recipient_email = recipient.get('_recipient_email', '')
-            elif '_recipient_emails' in recipient:
-                emails = recipient.get('_recipient_emails', [])
-                if emails:
-                    recipient_email = emails[0]  # Use first email if multiple
-            else:
-                # Try to get from the recipient column
-                recipient_email = recipient.get(recipient_column_name, '')
-            
-            if not recipient_email:
-                logger.warning(f"Could not determine recipient email for row, skipping consolidation")
-                # Add to consolidated as-is
-                if 'consolidated' not in consolidated_dict:
-                    consolidated_dict[f"__uncategorized_{len(consolidated_dict)}"] = recipient
-                continue
-            
-            recipient_email = str(recipient_email).strip().lower()
-            
-            if recipient_email not in consolidated_dict:
-                # First occurrence of this recipient - create base entry
-                consolidated_dict[recipient_email] = recipient.copy()
-                
-                # Initialize consolidation storage for each data column
-                for col_idx in self.email_config.consolidation_data_columns:
-                    if col_idx < len(self.headers):
-                        col_name = self.headers[col_idx]
-                        # Store original values in a list for consolidation
-                        original_value = recipient.get(col_name, '')
-                        consolidated_dict[recipient_email][f'_consolidated_{col_name}'] = [original_value]
-            else:
-                # Subsequent occurrence - aggregate data columns
-                for col_idx in self.email_config.consolidation_data_columns:
-                    if col_idx < len(self.headers):
-                        col_name = self.headers[col_idx]
-                        data_value = recipient.get(col_name, '')
-                        
-                        # Add to consolidation list
-                        key = f'_consolidated_{col_name}'
-                        if key not in consolidated_dict[recipient_email]:
-                            consolidated_dict[recipient_email][key] = []
-                        
-                        consolidated_dict[recipient_email][key].append(data_value)
-        
-        # Build final consolidated recipient list
-        consolidated_recipients = []
-        for email, consolidated_recipient in consolidated_dict.items():
-            if not email.startswith('__uncategorized_'):
-                # Process consolidation - combine data columns with bullet points
-                for col_idx in self.email_config.consolidation_data_columns:
-                    if col_idx < len(self.headers):
-                        col_name = self.headers[col_idx]
-                        key = f'_consolidated_{col_name}'
-                        
-                        if key in consolidated_recipient:
-                            # Combine all values with line breaks and bullet points
-                            values = [str(v).strip() for v in consolidated_recipient[key] if str(v).strip()]
-                            unique_values = []
-                            for v in values:
-                                if v not in unique_values:
-                                    unique_values.append(v)
-                            
-                            if len(unique_values) > 1:
-                                # Multiple values - format as list
-                                combined_text = "\n".join(f"• {v}" for v in unique_values)
-                            elif unique_values:
-                                combined_text = unique_values[0]
-                            else:
-                                combined_text = ""
-                            
-                            # Update the column value with consolidated data
-                            consolidated_recipient[col_name] = combined_text
-                            
-                            # Remove the temporary consolidation key
-                            del consolidated_recipient[key]
-            else:
-                # Keep uncategorized entries as-is
-                consolidated_recipient.pop(f'_consolidated_{col_name}', None)
-            
-            consolidated_recipients.append(consolidated_recipient)
-        
-        logger.info(f"Consolidated from {len(recipients)} rows to {len(consolidated_recipients)} recipients")
-        return consolidated_recipients
-    
     def send_emails(self):
         try:
             subject = self.subject_input.text().strip()
@@ -2152,9 +2143,8 @@ The program will now use these settings for extracting email addresses."""
                             # No email config, use standard email column
                             recipients.append(recipient)
                 
-                # Apply consolidation if enabled
-                if self.email_config and self.email_config.consolidate_rows_by_recipient:
-                    recipients = self.consolidate_rows_by_recipient(recipients)
+                # Note: Data consolidation already applied in on_email_config_complete()
+                # No need to consolidate again here
                 
                 if not recipients:
                     QMessageBox.warning(self, "No Valid Recipients", 

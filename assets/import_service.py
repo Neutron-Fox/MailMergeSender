@@ -117,11 +117,11 @@ class ImportService:
             
             if result['success']:
                 logger.info(
-                    f"✓ File imported successfully: {result['message']} "
+                    f"[OK] File imported successfully: {result['message']} "
                     f"({len(result['data'])} rows)"
                 )
             else:
-                logger.error(f"✗ Import failed: {result['message']}")
+                logger.error(f"[ERROR] Import failed: {result['message']}")
             
             return result
         
