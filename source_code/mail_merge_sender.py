@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLabel, QPushButton, QFileDialog, QLineEdit, QMessageBox, QTextEdit, 
     QGroupBox, QTableWidget, QTableWidgetItem, QTabWidget, QComboBox, QProgressBar,
-    QScrollArea, QCheckBox, QDialog, QListWidget, QListWidgetItem
+    QScrollArea, QCheckBox, QDialog, QListWidget, QListWidgetItem, QSpinBox
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
@@ -399,9 +399,23 @@ class UniversalSender(QMainWindow):
         tabulator_layout = QVBoxLayout()
         tabulator_layout.setContentsMargins(6, 6, 6, 6)
         tabulator_layout.setSpacing(4)
-        self.enable_tabulator_checkbox = QCheckBox("Enable indentation (add tab before each line)")
-        self.enable_tabulator_checkbox.stateChanged.connect(self.auto_save_and_update_preview)
+        self.enable_tabulator_checkbox = QCheckBox("Enable indentation (add tabs before each line)")
+        self.enable_tabulator_checkbox.stateChanged.connect(self.on_tabulator_enabled_changed)
         tabulator_layout.addWidget(self.enable_tabulator_checkbox)
+        tabulator_count_layout = QHBoxLayout()
+        tabulator_count_label = QLabel("Number of tabs:")
+        tabulator_count_label.setMinimumWidth(90)
+        tabulator_count_layout.addWidget(tabulator_count_label)
+        self.tabulator_count_spinbox = QSpinBox()
+        self.tabulator_count_spinbox.setMinimum(1)
+        self.tabulator_count_spinbox.setMaximum(10)
+        self.tabulator_count_spinbox.setValue(1)
+        self.tabulator_count_spinbox.setMinimumWidth(60)
+        self.tabulator_count_spinbox.setEnabled(False)
+        self.tabulator_count_spinbox.valueChanged.connect(self.auto_save_and_update_preview)
+        tabulator_count_layout.addWidget(self.tabulator_count_spinbox)
+        tabulator_count_layout.addStretch()
+        tabulator_layout.addLayout(tabulator_count_layout)
         tabulator_group.setLayout(tabulator_layout)
         main_layout.addWidget(tabulator_group)
         bullet_group = QGroupBox("Step 3: Bullet Point Formatting")
@@ -868,6 +882,13 @@ class UniversalSender(QMainWindow):
         self.bullet_combo.setEnabled(is_enabled)
         self.auto_save_and_update_preview()
 
+    def on_tabulator_enabled_changed(self, state):
+        """Enable/disable tabulator count spinbox when checkbox is toggled"""
+        is_enabled = (state == 2)
+        if hasattr(self, 'tabulator_count_spinbox'):
+            self.tabulator_count_spinbox.setEnabled(is_enabled)
+        self.auto_save_and_update_preview()
+
     def load_formatting_settings(self):
         """Load saved formatting settings for selected placeholder."""
         placeholder = self.current_format_placeholder
@@ -876,6 +897,10 @@ class UniversalSender(QMainWindow):
             tabulator_enabled = settings.get('tabulator_enabled', False)
             if hasattr(self, 'enable_tabulator_checkbox'):
                 self.enable_tabulator_checkbox.setChecked(tabulator_enabled)
+            tabulator_count = settings.get('tabulator_count', 1)
+            if hasattr(self, 'tabulator_count_spinbox'):
+                self.tabulator_count_spinbox.setValue(tabulator_count)
+                self.tabulator_count_spinbox.setEnabled(tabulator_enabled)
             bullet_enabled = settings.get('bullet_enabled', False)
             if hasattr(self, 'enable_bullet_checkbox'):
                 self.enable_bullet_checkbox.setChecked(bullet_enabled)
@@ -933,6 +958,7 @@ class UniversalSender(QMainWindow):
                 replacements.append((find_text, replace_text, special_value, target_column))
         self.template_formatting[placeholder] = {
             'tabulator_enabled': self.enable_tabulator_checkbox.isChecked() if hasattr(self, 'enable_tabulator_checkbox') else False,
+            'tabulator_count': self.tabulator_count_spinbox.value() if hasattr(self, 'tabulator_count_spinbox') else 1,
             'bullet_enabled': self.enable_bullet_checkbox.isChecked() if hasattr(self, 'enable_bullet_checkbox') else False,
             'bullet': self.bullet_combo.currentData(),
             'replacements': replacements
@@ -996,23 +1022,27 @@ class UniversalSender(QMainWindow):
             self.format_preview.setText(f"Preview error: {str(e)}")
             logger.error(f"Error updating format preview: {e}")
 
-    def apply_tabulator(self, text: str) -> str:
+    def apply_tabulator(self, text: str, tab_count: int = 1) -> str:
         """Apply tabulator (indentation) formatting to each line.
         
-        Adds a tab character at the beginning of each non-empty line.
+        Adds specified number of tab characters at the beginning of each non-empty line.
         
         Args:
             text: Text to format
+            tab_count: Number of tabs to add (1-10)
             
         Returns:
             Text with tab indentation applied to each line
         """
+        # Ensure tab_count is within valid range
+        tab_count = max(1, min(10, tab_count))
+        tabs = "\t" * tab_count
         lines = text.split('\n')
         tabulated_lines = []
         for line in lines:
             line = line.strip()
             if line:
-                tabulated_lines.append(f"\t{line}")
+                tabulated_lines.append(f"{tabs}{line}")
         return '\n'.join(tabulated_lines)
 
     def apply_bullet_points(self, text: str, bullet: str = '-') -> str:
@@ -1110,6 +1140,7 @@ class UniversalSender(QMainWindow):
         if tabulator_enabled or bullet_enabled:
             logger.debug(f"format_column_data_new: Applying formatting (tabulator={tabulator_enabled}, bullet={bullet_enabled})")
             bullet = settings.get('bullet', '-') if bullet_enabled else None
+            tabulator_count = settings.get('tabulator_count', 1)
             # Split by newlines only - don't auto-split by semicolons
             # Let user's replacement rules handle semicolon-to-line-break conversion
             lines = formatted.split('\n')
@@ -1119,7 +1150,7 @@ class UniversalSender(QMainWindow):
                 if line:
                     # Apply tabulator if enabled
                     if tabulator_enabled:
-                        tabulated = self.apply_tabulator(line)
+                        tabulated = self.apply_tabulator(line, tabulator_count)
                     else:
                         tabulated = line
                     
