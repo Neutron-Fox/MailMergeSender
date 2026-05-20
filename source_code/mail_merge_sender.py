@@ -395,7 +395,16 @@ class UniversalSender(QMainWindow):
         column_layout.addWidget(self.mapped_columns_label)
         column_group.setLayout(column_layout)
         main_layout.addWidget(column_group)
-        bullet_group = QGroupBox("Step 2: Bullet Point Formatting")
+        tabulator_group = QGroupBox("Step 2: Indentation (Tabulator)")
+        tabulator_layout = QVBoxLayout()
+        tabulator_layout.setContentsMargins(6, 6, 6, 6)
+        tabulator_layout.setSpacing(4)
+        self.enable_tabulator_checkbox = QCheckBox("Enable indentation (add tab before each line)")
+        self.enable_tabulator_checkbox.stateChanged.connect(self.auto_save_and_update_preview)
+        tabulator_layout.addWidget(self.enable_tabulator_checkbox)
+        tabulator_group.setLayout(tabulator_layout)
+        main_layout.addWidget(tabulator_group)
+        bullet_group = QGroupBox("Step 3: Bullet Point Formatting")
         bullet_layout = QVBoxLayout()
         bullet_layout.setContentsMargins(6, 6, 6, 6)
         bullet_layout.setSpacing(4)
@@ -419,7 +428,7 @@ class UniversalSender(QMainWindow):
         bullet_layout.addLayout(bullet_options_layout)
         bullet_group.setLayout(bullet_layout)
         main_layout.addWidget(bullet_group)
-        replacement_section = QGroupBox("Step 3: String Replacements (Optional)")
+        replacement_section = QGroupBox("Step 4: String Replacements (Optional)")
         replacement_section_layout = QVBoxLayout()
         replacement_section_layout.setContentsMargins(6, 6, 6, 6)
         replacement_section_layout.setSpacing(6)
@@ -864,6 +873,9 @@ class UniversalSender(QMainWindow):
         placeholder = self.current_format_placeholder
         if placeholder in self.template_formatting:
             settings = self.template_formatting[placeholder]
+            tabulator_enabled = settings.get('tabulator_enabled', False)
+            if hasattr(self, 'enable_tabulator_checkbox'):
+                self.enable_tabulator_checkbox.setChecked(tabulator_enabled)
             bullet_enabled = settings.get('bullet_enabled', False)
             if hasattr(self, 'enable_bullet_checkbox'):
                 self.enable_bullet_checkbox.setChecked(bullet_enabled)
@@ -891,6 +903,8 @@ class UniversalSender(QMainWindow):
                         target_column = "(All mapped columns)"
                     self.add_replacement_pair(find_text, replace_text, special_type, target_column)
         else:
+            if hasattr(self, 'enable_tabulator_checkbox'):
+                self.enable_tabulator_checkbox.setChecked(False)
             if hasattr(self, 'enable_bullet_checkbox'):
                 self.enable_bullet_checkbox.setChecked(False)
             self.bullet_combo.setCurrentIndex(0)
@@ -918,6 +932,7 @@ class UniversalSender(QMainWindow):
                     continue
                 replacements.append((find_text, replace_text, special_value, target_column))
         self.template_formatting[placeholder] = {
+            'tabulator_enabled': self.enable_tabulator_checkbox.isChecked() if hasattr(self, 'enable_tabulator_checkbox') else False,
             'bullet_enabled': self.enable_bullet_checkbox.isChecked() if hasattr(self, 'enable_bullet_checkbox') else False,
             'bullet': self.bullet_combo.currentData(),
             'replacements': replacements
@@ -981,6 +996,67 @@ class UniversalSender(QMainWindow):
             self.format_preview.setText(f"Preview error: {str(e)}")
             logger.error(f"Error updating format preview: {e}")
 
+    def apply_tabulator(self, text: str) -> str:
+        """Apply tabulator (indentation) formatting to each line.
+        
+        Adds a tab character at the beginning of each non-empty line.
+        
+        Args:
+            text: Text to format
+            
+        Returns:
+            Text with tab indentation applied to each line
+        """
+        lines = text.split('\n')
+        tabulated_lines = []
+        for line in lines:
+            line = line.strip()
+            if line:
+                tabulated_lines.append(f"\t{line}")
+        return '\n'.join(tabulated_lines)
+
+    def apply_bullet_points(self, text: str, bullet: str = '-') -> str:
+        """Apply bullet points formatting to each line.
+        
+        Adds a bullet symbol after each indentation and space.
+        Skips lines that already have a bullet point to prevent duplicates.
+        
+        Args:
+            text: Text to format (assumed already tabulated if desired)
+            bullet: The bullet symbol to use
+            
+        Returns:
+            Text with bullet points added after tabs
+        """
+        lines = text.split('\n')
+        bulleted_lines = []
+        # All possible bullet characters
+        all_bullets = set(self.bullet_styles.values())
+        
+        for line in lines:
+            if line.startswith('\t'):
+                # If already tabulated, check if bullet already exists
+                content_after_tab = line[1:].lstrip()
+                # Check if line already starts with any bullet character
+                if content_after_tab and content_after_tab[0] in all_bullets:
+                    # Already has a bullet, keep as is
+                    bulleted_lines.append(line)
+                else:
+                    # Add bullet after the tab
+                    bulleted_lines.append(f"\t{bullet} {content_after_tab}")
+            elif line.strip():
+                # If not tabulated, check if it already has a bullet
+                stripped = line.strip()
+                if stripped and stripped[0] in all_bullets:
+                    # Already has a bullet, keep as is
+                    bulleted_lines.append(line)
+                else:
+                    # Add bullet and space
+                    bulleted_lines.append(f"{bullet} {stripped}")
+            else:
+                bulleted_lines.append(line)
+        return '\n'.join(bulleted_lines)
+
     def format_column_data_new(self, data, placeholder, source_column=None, include_global=True):
         """Apply placeholder formatting rules and optional per-column replacement targeting."""
         if not data:
@@ -1029,15 +1105,31 @@ class UniversalSender(QMainWindow):
                     logger.debug(f"    Not found: '{find_text}' not in data")
         
         bullet_enabled = settings.get('bullet_enabled', False)
-        if bullet_enabled:
-            logger.debug(f"format_column_data_new: Applying bullet formatting")
-            bullet = settings.get('bullet', '-')
+        tabulator_enabled = settings.get('tabulator_enabled', False)
+        
+        if tabulator_enabled or bullet_enabled:
+            logger.debug(f"format_column_data_new: Applying formatting (tabulator={tabulator_enabled}, bullet={bullet_enabled})")
+            bullet = settings.get('bullet', '-') if bullet_enabled else None
+            # Split by newlines only - don't auto-split by semicolons
+            # Let user's replacement rules handle semicolon-to-line-break conversion
             lines = formatted.split('\n')
             formatted_lines = []
             for line in lines:
                 line = line.strip()
                 if line:
-                    formatted_lines.append(f"\t{bullet} {line}")
+                    # Apply tabulator if enabled
+                    if tabulator_enabled:
+                        tabulated = self.apply_tabulator(line)
+                    else:
+                        tabulated = line
+                    
+                    # Apply bullet points if enabled
+                    if bullet_enabled:
+                        bulleted = self.apply_bullet_points(tabulated, bullet)
+                    else:
+                        bulleted = tabulated
+                    
+                    formatted_lines.append(bulleted)
             formatted = '\n'.join(formatted_lines)
         
         logger.debug(f"format_column_data_new: Result for '{placeholder}': '{formatted[:50] if len(formatted) > 50 else formatted}'")
