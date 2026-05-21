@@ -59,7 +59,8 @@ class UniversalSender(QMainWindow):
         self.tabs_created = set()
         self.email_accounts_loaded = False
         self.signatures_loaded = False
-        self.replacement_pairs = []  
+        self.replacement_pairs = []
+        self._loading = False  # Flag to prevent auto-save during load  
         self.setup_ui()
         self.apply_theme()
     def setup_ui(self):
@@ -126,8 +127,7 @@ class UniversalSender(QMainWindow):
         deselect_all_btn.setMaximumWidth(100)
         deselect_all_btn.clicked.connect(self.deselect_all_rows)
         search_filter_layout.addWidget(select_all_btn)
-        search_filter_layout.addWidget(deselect_all_btn)
-        search_filter_layout.addWidget(QLabel("|"))  
+        search_filter_layout.addWidget(deselect_all_btn) 
         search_label = QLabel("Search:")
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Type to search in all columns...")
@@ -892,53 +892,62 @@ class UniversalSender(QMainWindow):
     def load_formatting_settings(self):
         """Load saved formatting settings for selected placeholder."""
         placeholder = self.current_format_placeholder
-        if placeholder in self.template_formatting:
-            settings = self.template_formatting[placeholder]
-            tabulator_enabled = settings.get('tabulator_enabled', False)
-            if hasattr(self, 'enable_tabulator_checkbox'):
-                self.enable_tabulator_checkbox.setChecked(tabulator_enabled)
-            tabulator_count = settings.get('tabulator_count', 1)
-            if hasattr(self, 'tabulator_count_spinbox'):
-                self.tabulator_count_spinbox.setValue(tabulator_count)
-                self.tabulator_count_spinbox.setEnabled(tabulator_enabled)
-            bullet_enabled = settings.get('bullet_enabled', False)
-            if hasattr(self, 'enable_bullet_checkbox'):
-                self.enable_bullet_checkbox.setChecked(bullet_enabled)
-            bullet = settings.get('bullet', '-')
-            for i in range(self.bullet_combo.count()):
-                if self.bullet_combo.itemData(i) == bullet:
-                    self.bullet_combo.setCurrentIndex(i)
-                    break
-            replacements = settings.get('replacements', [])
-            while self.replacement_pairs:
-                pair = self.replacement_pairs[0]
-                self.replacement_layout.removeWidget(pair['widget'])
-                pair['widget'].deleteLater()
-                self.replacement_pairs.pop(0)
-            if replacements:
-                for replacement_data in replacements:
-                    if len(replacement_data) == 4:
-                        find_text, replace_text, special_type, target_column = replacement_data
-                    elif len(replacement_data) == 3:
-                        find_text, replace_text, special_type = replacement_data
-                        target_column = "(All mapped columns)"
-                    else:
-                        find_text, replace_text = replacement_data
-                        special_type = None
-                        target_column = "(All mapped columns)"
-                    self.add_replacement_pair(find_text, replace_text, special_type, target_column)
-        else:
-            if hasattr(self, 'enable_tabulator_checkbox'):
-                self.enable_tabulator_checkbox.setChecked(False)
-            if hasattr(self, 'enable_bullet_checkbox'):
-                self.enable_bullet_checkbox.setChecked(False)
-            self.bullet_combo.setCurrentIndex(0)
-            while self.replacement_pairs:
-                pair = self.replacement_pairs[0]
-                self.replacement_layout.removeWidget(pair['widget'])
-                pair['widget'].deleteLater()
-                self.replacement_pairs.pop(0)
-        self.update_format_preview()
+        # Temporarily disable signals to prevent partial saves during load
+        self._loading = True
+        try:
+            if placeholder in self.template_formatting:
+                settings = self.template_formatting[placeholder]
+                tabulator_enabled = settings.get('tabulator_enabled', False)
+                if hasattr(self, 'enable_tabulator_checkbox'):
+                    self.enable_tabulator_checkbox.setChecked(tabulator_enabled)
+                tabulator_count = settings.get('tabulator_count', 1)
+                if hasattr(self, 'tabulator_count_spinbox'):
+                    self.tabulator_count_spinbox.setValue(tabulator_count)
+                    self.tabulator_count_spinbox.setEnabled(tabulator_enabled)
+                bullet_enabled = settings.get('bullet_enabled', False)
+                if hasattr(self, 'enable_bullet_checkbox'):
+                    self.enable_bullet_checkbox.setChecked(bullet_enabled)
+                bullet = settings.get('bullet', '-')
+                for i in range(self.bullet_combo.count()):
+                    if self.bullet_combo.itemData(i) == bullet:
+                        self.bullet_combo.setCurrentIndex(i)
+                        break
+                replacements = settings.get('replacements', [])
+                while self.replacement_pairs:
+                    pair = self.replacement_pairs[0]
+                    self.replacement_layout.removeWidget(pair['widget'])
+                    pair['widget'].deleteLater()
+                    self.replacement_pairs.pop(0)
+                if replacements:
+                    for replacement_data in replacements:
+                        if len(replacement_data) == 4:
+                            find_text, replace_text, special_type, target_column = replacement_data
+                        elif len(replacement_data) == 3:
+                            find_text, replace_text, special_type = replacement_data
+                            target_column = "(All mapped columns)"
+                        else:
+                            find_text, replace_text = replacement_data
+                            special_type = None
+                            target_column = "(All mapped columns)"
+                        self.add_replacement_pair(find_text, replace_text, special_type, target_column)
+            else:
+                if hasattr(self, 'enable_tabulator_checkbox'):
+                    self.enable_tabulator_checkbox.setChecked(False)
+                if hasattr(self, 'enable_bullet_checkbox'):
+                    self.enable_bullet_checkbox.setChecked(False)
+                if hasattr(self, 'tabulator_count_spinbox'):
+                    self.tabulator_count_spinbox.setValue(1)
+                    self.tabulator_count_spinbox.setEnabled(False)
+                self.bullet_combo.setCurrentIndex(0)
+                while self.replacement_pairs:
+                    pair = self.replacement_pairs[0]
+                    self.replacement_layout.removeWidget(pair['widget'])
+                    pair['widget'].deleteLater()
+                    self.replacement_pairs.pop(0)
+        finally:
+            self._loading = False
+        # After all UI values are loaded, save and update preview
+        self.auto_save_and_update_preview()
 
     def save_formatting_rules(self, show_message=True):
         """Save formatting rules for selected placeholder."""
@@ -968,12 +977,19 @@ class UniversalSender(QMainWindow):
 
     def auto_save_and_update_preview(self):
         """Automatically save formatting rules and update preview without showing message"""
+        # Skip if we're currently loading settings
+        if hasattr(self, '_loading') and self._loading:
+            return
         self.save_formatting_rules(show_message=False)
         self.update_format_preview()
 
     def update_format_preview(self):
         """Update review preview showing all mapped columns for selected placeholder."""
         try:
+            # Store current scroll position to prevent jumping to top
+            scroll_bar = self.format_preview.verticalScrollBar()
+            current_scroll_position = scroll_bar.value()
+            
             placeholder = self.current_format_placeholder
             if not placeholder:
                 self.format_preview.setText("Select a placeholder to review formatting.")
@@ -996,7 +1012,24 @@ class UniversalSender(QMainWindow):
                 preview_row_index = 0
 
             row = self.imported_data[preview_row_index]
-            preview_sections = [f"Preview from: {preview_source}", ""]
+            
+            # Get current formatting settings
+            tabulator_enabled = self.enable_tabulator_checkbox.isChecked() if hasattr(self, 'enable_tabulator_checkbox') else False
+            tabulator_count = self.tabulator_count_spinbox.value() if hasattr(self, 'tabulator_count_spinbox') else 1
+            bullet_enabled = self.enable_bullet_checkbox.isChecked() if hasattr(self, 'enable_bullet_checkbox') else False
+            bullet_symbol = self.bullet_combo.currentData() if hasattr(self, 'bullet_combo') else '-'
+            replacements_count = len(self.replacement_pairs)
+            
+            # Build formatting info section
+            preview_sections = [f"PREVIEW: {placeholder} | {preview_source}", ""]
+            preview_sections.append("="*60)
+            preview_sections.append("FORMATTING SETTINGS:")
+            preview_sections.append(f"  - Tabulator: {'ENABLED' if tabulator_enabled else 'DISABLED'} (Count: {tabulator_count})")
+            preview_sections.append(f"  - Bullet Points: {'ENABLED' if bullet_enabled else 'DISABLED'} (Symbol: {bullet_symbol})")
+            preview_sections.append(f"  - Text Replacements: {replacements_count} rule(s)")
+            preview_sections.append("="*60)
+            preview_sections.append("")
+            
             combined_original = []
             combined_formatted = []
 
@@ -1007,19 +1040,28 @@ class UniversalSender(QMainWindow):
                     formatted_value = self.format_column_data_new(raw_value, placeholder, col_name)
                     combined_original.append(raw_value)
                     combined_formatted.append(formatted_value)
-                    preview_sections.append(f"Column: {col_name}")
-                    preview_sections.append(f"Original: {raw_value}")
-                    preview_sections.append(f"Formatted: {formatted_value}")
-                    preview_sections.append("-" * 40)
+                    preview_sections.append(f"[COLUMN] {col_name}")
+                    preview_sections.append(f"  Original: {raw_value if raw_value else '(empty)'}")
+                    preview_sections.append(f"  Formatted: {formatted_value if formatted_value else '(empty)'}")
+                    preview_sections.append("")
 
-            preview_sections.append("Combined Original:")
-            preview_sections.append(" | ".join(combined_original))
+            preview_sections.append("="*60)
+            preview_sections.append("[OUTPUT] COMBINED:")
             preview_sections.append("")
-            preview_sections.append("Combined Formatted:")
-            preview_sections.append(" | ".join(combined_formatted))
+            preview_sections.append("Original (merged with |):")
+            preview_sections.append(" | ".join(combined_original) if combined_original else "(no data)")
+            preview_sections.append("")
+            preview_sections.append("[FORMATTED] Final Output (with all rules applied):")
+            combined_formatted_output = " | ".join(combined_formatted) if combined_formatted else "(no data)"
+            preview_sections.append(combined_formatted_output)
+            preview_sections.append("="*60)
+            
             self.format_preview.setText("\n".join(preview_sections))
+            
+            # Restore scroll position to keep preview in same position
+            scroll_bar.setValue(current_scroll_position)
         except Exception as e:
-            self.format_preview.setText(f"Preview error: {str(e)}")
+            self.format_preview.setText(f"[ERROR] Preview error: {str(e)}")
             logger.error(f"Error updating format preview: {e}")
 
     def apply_tabulator(self, text: str, tab_count: int = 1) -> str:
@@ -1603,6 +1645,10 @@ The program will now use these settings for extracting email addresses."""
             # Refresh the table display
             self.update_table_display()
             
+            # Update preview after data consolidation
+            if hasattr(self, 'format_preview'):
+                self.update_format_preview()
+            
             logger.info(f"Consolidated {len(consolidated_data)} unique recipients from original data")
             self.statusBar().showMessage(f"Data consolidated: {len(consolidated_data)} unique recipients")
         
@@ -1620,6 +1666,9 @@ The program will now use these settings for extracting email addresses."""
         self.update_table_display()
         self.data_table.selectionModel().selectionChanged.connect(self.update_selection_info)
         self.update_selection_info()
+        # Update preview after data is loaded
+        if hasattr(self, 'format_preview'):
+            self.update_format_preview()
     def update_table_display(self):
         try:
             self.data_table.itemChanged.disconnect(self.on_checkbox_changed)
@@ -1628,7 +1677,7 @@ The program will now use these settings for extracting email addresses."""
         display_data = self.filtered_data  
         self.data_table.setRowCount(len(display_data))
         self.data_table.setColumnCount(len(self.headers) + 1)  
-        table_headers = ["✓"] + self.headers
+        table_headers = ["SELECT"] + self.headers
         self.data_table.setHorizontalHeaderLabels(table_headers)
         self.data_table.setColumnWidth(0, 40)
         for row, data in enumerate(display_data):
@@ -1716,6 +1765,9 @@ The program will now use these settings for extracting email addresses."""
         self.sort_table_data()
         self.update_table_display()
         self.update_selection_info()
+        # Update preview after filtering
+        if hasattr(self, 'format_preview'):
+            self.update_format_preview()
     def sort_table_data(self):
         if not self.filtered_data or not hasattr(self, 'filter_column_combo'):
             return
@@ -1732,6 +1784,9 @@ The program will now use these settings for extracting email addresses."""
             )
             self.update_table_display()
             self.update_selection_info()
+            # Update preview after sorting
+            if hasattr(self, 'format_preview'):
+                self.update_format_preview()
         except Exception as e:
             logger.warning(f"Error sorting data: {e}")
     def clear_filters(self):
@@ -1741,6 +1796,9 @@ The program will now use these settings for extracting email addresses."""
         self.filtered_data = self.imported_data.copy()
         self.update_table_display()
         self.update_selection_info()
+        # Update preview after clearing filters
+        if hasattr(self, 'format_preview'):
+            self.update_format_preview()
     def on_checkbox_changed(self, item):
         if item.column() == 0:  
             row = item.row()
@@ -1845,6 +1903,9 @@ The program will now use these settings for extracting email addresses."""
                 self.update_mapping_table()
             if hasattr(self, 'format_placeholder_combo'):
                 self.refresh_formatting_placeholder_options()
+            # Update preview after template changes
+            if hasattr(self, 'format_preview'):
+                self.update_format_preview()
         except Exception as e:
             logger.error(f"Error detecting placeholders: {e}")
             import traceback
@@ -1864,7 +1925,7 @@ The program will now use these settings for extracting email addresses."""
         # Update signature status label
         if hasattr(self, 'signature_status_label'):
             if self.signatures_list:
-                self.signature_status_label.setText(f"✓ {len(self.signatures_list)} signature(s) loaded")
+                self.signature_status_label.setText(f"[OK] {len(self.signatures_list)} signature(s) loaded")
             else:
                 self.signature_status_label.setText("No signatures loaded yet")
         
@@ -2148,11 +2209,11 @@ The program will now use these settings for extracting email addresses."""
                 account_email = self.email_accounts_list[account_index]['email'] if self.email_accounts_list and account_index < len(self.email_accounts_list) else "Unknown"
                 self.summary_label.setText(
                     f"Ready to send emails!\n\n"
-                    f"• Recipients: {recipient_count} selected contacts\n"
-                    f"• Subject: ✓\n"
-                    f"• Template: ✓\n" 
-                    f"• Selected sender: {account_email}\n"
-                    f"• Resolved sender: will validate before sending"
+                    f"- Recipients: {recipient_count} selected contacts\n"
+                    f"- Subject: [OK]\n"
+                    f"- Template: [OK]\n" 
+                    f"- Selected sender: {account_email}\n"
+                    f"- Resolved sender: will validate before sending"
                 )
             else:
                 summary_parts = []
@@ -2161,9 +2222,9 @@ The program will now use these settings for extracting email addresses."""
                 else:
                     summary_parts.append(f"Recipients: {recipient_count} selected")
                 summary_parts.extend([
-                    f"Subject: {'✓' if has_subject else '✗'}",
-                    f"Template: {'✓' if has_template else '✗'}",
-                    f"Account: {'✓' if has_account else '✗'}"
+                    f"Subject: {'[OK]' if has_subject else '[NO]'}",
+                    f"Template: {'[OK]' if has_template else '[NO]'}",
+                    f"Account: {'[OK]' if has_account else '[NO]'}"
                 ])
                 self.summary_label.setText(" | ".join(summary_parts))
         send_ready = has_subject and has_template and has_account and recipient_count > 0
@@ -2343,7 +2404,7 @@ The program will now use these settings for extracting email addresses."""
                         self, "Success",
                         f"Successfully sent {result['sent']} emails!"
                     )
-                    self.log_display.append(f"✓ Successfully sent {result['sent']} emails")
+                    self.log_display.append(f"[OK] Successfully sent {result['sent']} emails")
                 else:
                     failed_details = ""
                     if 'failed_details' in result and result['failed_details']:
@@ -2364,7 +2425,7 @@ The program will now use these settings for extracting email addresses."""
                     self, "Error",
                     f"Error sending emails: {str(e)}"
                 )
-                self.log_display.append(f"✗ Error: {str(e)}")
+                self.log_display.append(f"[ERROR] Error: {str(e)}")
         except Exception as e:
             logger.error(f"Critical error in send_emails: {e}")
             QMessageBox.critical(self, "Critical Error", f"A critical error occurred: {str(e)}")

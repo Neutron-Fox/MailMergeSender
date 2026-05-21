@@ -418,16 +418,19 @@ def get_complete_style() -> str:
             background-color: transparent;
             color: {colors['text_primary']};
             font-family: 'Segoe UI', Arial, sans-serif;
+            border: none;
         }}
     """
     widget_style = f"""
         QWidget {{
             background-color: {colors['window_bg']};
             color: {colors['text_primary']};
+            border: none;
+            outline: none;
         }}
         QFrame {{
             background-color: {colors['window_bg']};
-            border: 1px solid {colors['border_primary']};
+            border: none;
             color: {colors['text_primary']};
         }}
         QSpinBox, QDoubleSpinBox {{

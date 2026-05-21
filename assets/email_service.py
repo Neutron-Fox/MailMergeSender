@@ -324,7 +324,7 @@ class EmailService:
             )
             
             is_running = OUTLOOK_PROCESS_NAME in result.stdout
-            status = "✓" if is_running else "✗"
+            status = "[OK]" if is_running else "[NO]"
             logger.info(f"{status} Outlook process running: {is_running}")
             return is_running
         
@@ -477,12 +477,12 @@ class EmailService:
                                 })
                                 logger.info(f"[OK] Account {i}: {email_address} ({account_name})")
                             except Exception as e:
-                                logger.warning(f"✗ Account {i}: Invalid email - {e}")
+                                logger.warning(f"[ERROR] Account {i}: Invalid email - {e}")
                         else:
-                            logger.warning(f"✗ Account {i}: No valid SMTP address")
+                            logger.warning(f"[ERROR] Account {i}: No valid SMTP address")
                     
                     except Exception as e:
-                        logger.warning(f"✗ Account {i} ({account_name}): {e}")
+                        logger.warning(f"[ERROR] Account {i} ({account_name}): {e}")
                 
                 except Exception as e:
                     logger.warning(f"Error processing account {i}: {e}")

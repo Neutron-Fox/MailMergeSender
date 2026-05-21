@@ -568,7 +568,7 @@ class EmailConfigurationWizard(QDialog):
         self.current_step = 5
         self.step_label.setText("Step 5/5: Review & Apply Configuration")
         self.back_btn.setEnabled(True)
-        self.next_btn.setText("✓ Apply Configuration")
+        self.next_btn.setText("[OK] Apply Configuration")
         
         group = QGroupBox("Review Your Configuration")
         layout = QVBoxLayout(group)
@@ -603,11 +603,11 @@ Data Columns to Consolidate: {', '.join(self.headers[i] for i in self.config.con
         extracted_emails = self.extract_emails_preview()
         
         if extracted_emails:
-            result_text = f"Found {len(extracted_emails)} email(s):\n\n" + "\n".join(f"  ✓ {email}" for email in extracted_emails[:10])
+            result_text = f"Found {len(extracted_emails)} email(s):\n\n" + "\n".join(f"  [OK] {email}" for email in extracted_emails[:10])
             if len(extracted_emails) > 10:
                 result_text += f"\n  ... and {len(extracted_emails) - 10} more"
         else:
-            result_text = "⚠ No valid emails found. Please review your configuration."
+            result_text = "[WARNING] No valid emails found. Please review your configuration."
         
         result_display = QLabel(result_text)
         result_display.setStyleSheet(f"background-color: {var_theme.colors['secondary_bg']}; padding: 15px; border-radius: 4px;")
@@ -619,7 +619,7 @@ Data Columns to Consolidate: {', '.join(self.headers[i] for i in self.config.con
         group.setLayout(layout)
         self.content_layout.addWidget(group)
         self.back_btn.setEnabled(True)
-        self.next_btn.setText("✓ Apply Configuration")
+        self.next_btn.setText("[OK] Apply Configuration")
         
         group = QGroupBox("Review Your Configuration")
         layout = QVBoxLayout(group)
@@ -650,11 +650,11 @@ Template:             Email regex validation active
         extracted_emails = self.extract_emails_preview()
         
         if extracted_emails:
-            result_text = f"Found {len(extracted_emails)} email(s):\n\n" + "\n".join(f"  ✓ {email}" for email in extracted_emails[:10])
+            result_text = f"Found {len(extracted_emails)} email(s):\n\n" + "\n".join(f"  [OK] {email}" for email in extracted_emails[:10])
             if len(extracted_emails) > 10:
                 result_text += f"\n  ... and {len(extracted_emails) - 10} more"
         else:
-            result_text = "⚠ No valid emails found. Please review your configuration."
+            result_text = "[WARNING] No valid emails found. Please review your configuration."
         
         result_display = QLabel(result_text)
         result_display.setStyleSheet(f"background-color: {var_theme.colors['secondary_bg']}; padding: 12px; border-radius: 4px;")
