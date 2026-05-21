@@ -28,9 +28,8 @@ class UniversalSender(QMainWindow):
         super().__init__()
         self.loading_screen = loading_screen
         self.setWindowTitle("Universal Email Sender")
-        self.setGeometry(100, 100, 1200, 800)  
-        self.setMinimumSize(1200, 800)
-        self.setMaximumSize(1200, 800)  
+        self.setGeometry(100, 100, 1600, 1000)  
+        self.setMinimumSize(1400, 900)  
         self.imported_data = []
         self.processed_data = []
         self.filtered_data = []
@@ -458,7 +457,7 @@ class UniversalSender(QMainWindow):
                 font-size: 10pt;
                 color: {var_theme.colors['text_primary']};
                 padding-top: 18px;
-                margin-top: 12px;
+                margin-top: 2px;
             }}
             QGroupBox::title {{
                 subcontrol-origin: margin;
@@ -470,15 +469,15 @@ class UniversalSender(QMainWindow):
             }}
         """)
         add_box_layout = QVBoxLayout()
-        add_box_layout.setContentsMargins(8, 10, 8, 8)
-        add_box_layout.setSpacing(6)
+        add_box_layout.setContentsMargins(6, 8, 6, 6)
+        add_box_layout.setSpacing(3)
         find_layout = QHBoxLayout()
         find_label = QLabel("Find:")
-        find_label.setMinimumWidth(55)
+        find_label.setMinimumWidth(50)
         find_layout.addWidget(find_label)
         self.new_find_input = QLineEdit()
         self.new_find_input.setPlaceholderText("Text to find...")
-        self.new_find_input.setMinimumHeight(24)
+        self.new_find_input.setMinimumHeight(20)
         self.new_find_input.setStyleSheet(f"""
             QLineEdit {{
                 background-color: {var_theme.colors['input_bg']};
@@ -496,11 +495,11 @@ class UniversalSender(QMainWindow):
         add_box_layout.addLayout(find_layout)
         replace_layout = QHBoxLayout()
         replace_label = QLabel("Replace:")
-        replace_label.setMinimumWidth(55)
+        replace_label.setMinimumWidth(50)
         replace_layout.addWidget(replace_label)
         self.new_replace_input = QLineEdit()
         self.new_replace_input.setPlaceholderText("Replacement text...")
-        self.new_replace_input.setMinimumHeight(24)
+        self.new_replace_input.setMinimumHeight(20)
         self.new_replace_input.setStyleSheet(f"""
             QLineEdit {{
                 background-color: {var_theme.colors['input_bg']};
@@ -517,19 +516,19 @@ class UniversalSender(QMainWindow):
         replace_layout.addWidget(self.new_replace_input)
         add_box_layout.addLayout(replace_layout)
         or_label = QLabel("— or use special character —")
-        or_label.setStyleSheet("font-size: 8pt; font-style: italic; color: #aaaaaa; margin: 4px 0px;")
+        or_label.setStyleSheet("font-size: 7pt; font-style: italic; color: #aaaaaa; margin: 2px 0px;")
         or_label.setAlignment(Qt.AlignCenter)
         add_box_layout.addWidget(or_label)
         special_layout = QHBoxLayout()
         special_label = QLabel("Special:")
-        special_label.setMinimumWidth(55)
+        special_label.setMinimumWidth(50)
         special_layout.addWidget(special_label)
         self.new_special_combo = QComboBox()
         self.new_special_combo.addItem("(None)", None)
         self.new_special_combo.addItem("Line break", "\n")
         self.new_special_combo.addItem("Space", " ")
         self.new_special_combo.addItem("Tab", "\t")
-        self.new_special_combo.setMinimumHeight(24)
+        self.new_special_combo.setMinimumHeight(20)
         self.new_special_combo.setStyleSheet(f"""
             QComboBox {{
                 background-color: {var_theme.colors['input_bg']};
@@ -559,11 +558,11 @@ class UniversalSender(QMainWindow):
         special_layout.addWidget(self.new_special_combo)
         special_layout.addStretch()
         add_box_layout.addLayout(special_layout)
-        add_box_layout.addSpacing(6)
+        add_box_layout.addSpacing(2)
         add_more_btn = QPushButton("+ Add Replacement")
         add_more_btn.setStyleSheet(get_button_style('success'))
-        add_more_btn.setMinimumHeight(28)
-        add_more_btn.setMaximumHeight(28)
+        add_more_btn.setMinimumHeight(24)
+        add_more_btn.setMaximumHeight(24)
         add_more_btn.clicked.connect(self.add_replacement_from_inputs)
         add_box_layout.addWidget(add_more_btn)
         add_box.setLayout(add_box_layout)
@@ -581,7 +580,7 @@ class UniversalSender(QMainWindow):
                 font-size: 10pt;
                 color: {var_theme.colors['button_primary']};
                 padding-top: 18px;
-                margin-top: 12px;
+                margin-top: 2px;
             }}
             QGroupBox::title {{
                 subcontrol-origin: margin;
@@ -597,8 +596,8 @@ class UniversalSender(QMainWindow):
         list_box_layout.setSpacing(6)
         scroll_area = QScrollArea()
         scroll_area.setWidgetResizable(True)
-        scroll_area.setMinimumHeight(155)
-        scroll_area.setMaximumHeight(155)
+        scroll_area.setMinimumHeight(160)
+        scroll_area.setMaximumHeight(160)
         scroll_area.setStyleSheet(f"""
             QScrollArea {{
                 background-color: {var_theme.colors['window_bg']};
@@ -627,8 +626,8 @@ class UniversalSender(QMainWindow):
         preview_layout = QVBoxLayout()
         preview_layout.setContentsMargins(6, 6, 6, 6)
         self.format_preview = QTextEdit()
-        self.format_preview.setMinimumHeight(80)
-        self.format_preview.setMaximumHeight(200)
+        self.format_preview.setMinimumHeight(100)
+        self.format_preview.setMaximumHeight(150)
         self.format_preview.setReadOnly(True)
         self.format_preview.setStyleSheet(
             """QTextEdit {
@@ -1068,6 +1067,7 @@ class UniversalSender(QMainWindow):
         """Apply tabulator (indentation) formatting to each line.
         
         Adds specified number of tab characters at the beginning of each non-empty line.
+        Preserves empty lines to maintain text structure.
         
         Args:
             text: Text to format
@@ -1081,24 +1081,32 @@ class UniversalSender(QMainWindow):
         tabs = "\t" * tab_count
         lines = text.split('\n')
         tabulated_lines = []
+        
         for line in lines:
-            line = line.strip()
-            if line:
-                tabulated_lines.append(f"{tabs}{line}")
+            # Check if line has content (after stripping leading/trailing whitespace)
+            stripped = line.strip()
+            if stripped:
+                # Apply tabs to non-empty lines
+                tabulated_lines.append(f"{tabs}{stripped}")
+            else:
+                # Preserve empty lines to maintain text structure
+                tabulated_lines.append("")
+        
         return '\n'.join(tabulated_lines)
 
     def apply_bullet_points(self, text: str, bullet: str = '-') -> str:
         """Apply bullet points formatting to each line.
         
-        Adds a bullet symbol after each indentation and space.
+        Adds a bullet symbol and space after leading tabs/whitespace on each non-empty line.
         Skips lines that already have a bullet point to prevent duplicates.
+        Works correctly with tabulated text.
         
         Args:
             text: Text to format (assumed already tabulated if desired)
             bullet: The bullet symbol to use
             
         Returns:
-            Text with bullet points added after tabs
+            Text with bullet points added after indentation
         """
         lines = text.split('\n')
         bulleted_lines = []
@@ -1106,27 +1114,28 @@ class UniversalSender(QMainWindow):
         all_bullets = set(self.bullet_styles.values())
         
         for line in lines:
-            if line.startswith('\t'):
-                # If already tabulated, check if bullet already exists
-                content_after_tab = line[1:].lstrip()
-                # Check if line already starts with any bullet character
-                if content_after_tab and content_after_tab[0] in all_bullets:
-                    # Already has a bullet, keep as is
-                    bulleted_lines.append(line)
-                else:
-                    # Add bullet after the tab
-                    bulleted_lines.append(f"\t{bullet} {content_after_tab}")
-            elif line.strip():
-                # If not tabulated, check if it already has a bullet
-                stripped = line.strip()
-                if stripped and stripped[0] in all_bullets:
-                    # Already has a bullet, keep as is
-                    bulleted_lines.append(line)
-                else:
-                    # Add bullet and space
-                    bulleted_lines.append(f"{bullet} {stripped}")
-            else:
+            stripped = line.strip()
+            
+            # Skip empty lines
+            if not stripped:
+                bulleted_lines.append("")
+                continue
+            
+            # Check if line already starts with any bullet character
+            if stripped[0] in all_bullets:
+                # Already has a bullet, keep as is
                 bulleted_lines.append(line)
+            else:
+                # Calculate indentation (tabs and spaces at the start)
+                leading_whitespace = len(line) - len(line.lstrip())
+                indentation = line[:leading_whitespace]
+                
+                # Add bullet after indentation
+                if indentation:
+                    bulleted_lines.append(f"{indentation}{bullet} {stripped}")
+                else:
+                    bulleted_lines.append(f"{bullet} {stripped}")
+        
         return '\n'.join(bulleted_lines)
 
     def format_column_data_new(self, data, placeholder, source_column=None, include_global=True):
@@ -1183,27 +1192,13 @@ class UniversalSender(QMainWindow):
             logger.debug(f"format_column_data_new: Applying formatting (tabulator={tabulator_enabled}, bullet={bullet_enabled})")
             bullet = settings.get('bullet', '-') if bullet_enabled else None
             tabulator_count = settings.get('tabulator_count', 1)
-            # Split by newlines only - don't auto-split by semicolons
-            # Let user's replacement rules handle semicolon-to-line-break conversion
-            lines = formatted.split('\n')
-            formatted_lines = []
-            for line in lines:
-                line = line.strip()
-                if line:
-                    # Apply tabulator if enabled
-                    if tabulator_enabled:
-                        tabulated = self.apply_tabulator(line, tabulator_count)
-                    else:
-                        tabulated = line
-                    
-                    # Apply bullet points if enabled
-                    if bullet_enabled:
-                        bulleted = self.apply_bullet_points(tabulated, bullet)
-                    else:
-                        bulleted = tabulated
-                    
-                    formatted_lines.append(bulleted)
-            formatted = '\n'.join(formatted_lines)
+            
+            # Apply formatting to entire text (handles all lines including those created by replacements)
+            if tabulator_enabled:
+                formatted = self.apply_tabulator(formatted, tabulator_count)
+            
+            if bullet_enabled:
+                formatted = self.apply_bullet_points(formatted, bullet)
         
         logger.debug(f"format_column_data_new: Result for '{placeholder}': '{formatted[:50] if len(formatted) > 50 else formatted}'")
         return formatted
