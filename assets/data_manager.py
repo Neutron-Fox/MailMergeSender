@@ -108,7 +108,7 @@ class PlaceholderManager:
                 
                 if best_match and best_score >= 60:
                     suggestions[placeholder] = best_match
-                    logger.debug(f"Suggested mapping: {placeholder} → {best_match} (score: {best_score})")
+                    logger.debug(f"Suggested mapping: {placeholder} -> {best_match} (score: {best_score})")
             
             logger.info(f"Created {len(suggestions)}/{len(placeholders)} mappings")
             return suggestions

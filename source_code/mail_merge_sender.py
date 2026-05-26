@@ -12,6 +12,7 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
 from .theme import var_theme, get_button_style, get_table_style
 from .email_config_wizard import EmailConfigurationWizard, EmailConfig
+from .drag_drop_attachments_window import DragDropAttachmentsWindow
 from assets.import_service import ImportService
 from assets.email_service import EmailService
 from assets.data_manager import PlaceholderManager
@@ -28,8 +29,14 @@ class UniversalSender(QMainWindow):
         super().__init__()
         self.loading_screen = loading_screen
         self.setWindowTitle("Universal Email Sender")
-        self.setGeometry(100, 100, 1600, 1000)  
-        self.setMinimumSize(1400, 900)  
+        self.setMinimumSize(1400, 900)
+        # Center window on screen using minimum size
+        desktop_geometry = QApplication.desktop().availableGeometry()
+        window_width = 1400
+        window_height = 900
+        x = (desktop_geometry.width() - window_width) // 2 + desktop_geometry.x()
+        y = (desktop_geometry.height() - window_height) // 2 + desktop_geometry.y()
+        self.setGeometry(x, y, window_width, window_height)  
         self.imported_data = []
         self.processed_data = []
         self.filtered_data = []
@@ -108,6 +115,13 @@ class UniversalSender(QMainWindow):
         self.import_btn.clicked.connect(self.import_file)
         self.import_btn.setEnabled(False)
         import_layout.addWidget(self.import_btn)
+        
+        self.start_config_btn = QPushButton("Start Configuration")
+        self.start_config_btn.setStyleSheet(get_button_style('primary'))
+        self.start_config_btn.clicked.connect(self.show_email_config_wizard)
+        self.start_config_btn.setEnabled(False)
+        import_layout.addWidget(self.start_config_btn)
+        
         import_layout.addStretch()
         file_layout.addLayout(import_layout)
         file_group.setLayout(file_layout)
@@ -205,6 +219,10 @@ class UniversalSender(QMainWindow):
         add_attachment_btn.setStyleSheet(get_button_style('primary'))
         add_attachment_btn.setMinimumSize(70, 26)
         add_attachment_btn.clicked.connect(self.add_attachment)
+        drag_drop_attachment_btn = QPushButton("Drag & Drop")
+        drag_drop_attachment_btn.setStyleSheet(get_button_style('primary'))
+        drag_drop_attachment_btn.setMinimumSize(80, 26)
+        drag_drop_attachment_btn.clicked.connect(self.open_drag_drop_window)
         remove_attachment_btn = QPushButton("Remove")
         remove_attachment_btn.setStyleSheet(get_button_style('danger'))
         remove_attachment_btn.setMinimumSize(70, 26)
@@ -214,6 +232,7 @@ class UniversalSender(QMainWindow):
         clear_attachments_btn.setMinimumSize(70, 26)
         clear_attachments_btn.clicked.connect(self.clear_attachments)
         attachments_buttons_layout.addWidget(add_attachment_btn)
+        attachments_buttons_layout.addWidget(drag_drop_attachment_btn)
         attachments_buttons_layout.addWidget(remove_attachment_btn)
         attachments_buttons_layout.addWidget(clear_attachments_btn)
         attachments_buttons_layout.addStretch()
@@ -1538,14 +1557,12 @@ class UniversalSender(QMainWindow):
                     self.refresh_formatting_placeholder_options()
                 self.populate_data_table()
                 self.next_btn_1.setEnabled(True)
+                self.start_config_btn.setEnabled(True)
                 self.statusBar().showMessage(f"Imported {len(self.imported_data)} rows")
                 # Instantly update mapping table if placeholders exist
                 if self.placeholders and hasattr(self, 'mapping_table'):
                     self.update_mapping_table()
                 QMessageBox.information(self, "Success", result['message'])
-                
-                # Show email configuration wizard
-                self.show_email_config_wizard()
             else:
                 QMessageBox.critical(self, "Import Error", result['message'])
         except Exception as e:
@@ -1565,7 +1582,7 @@ class UniversalSender(QMainWindow):
     def on_email_config_complete(self, config: EmailConfig):
         """Handle email configuration completion"""
         self.email_config = config
-        logger.info(f"Email configuration saved: columns={config.email_columns}, multiple={config.multiple_emails_per_row}")
+        logger.info(f"Email configuration saved: columns={config.email_columns}, recipient_mode={config.recipient_mode}")
         
         # Apply row consolidation if enabled
         if config.consolidate_rows_by_recipient:
@@ -1575,10 +1592,11 @@ class UniversalSender(QMainWindow):
         self.highlight_email_columns()
         
         # Show success message with configuration details
+        recipient_mode_display = "Multiple in One Cell" if config.recipient_mode == "multiple_in_one_cell" else "Same in Different Columns"
         msg = f"""Email Configuration Saved!
 
 Email Columns: {config.email_columns}
-Multiple Emails per Row: {'Yes' if config.multiple_emails_per_row else 'No'}
+Recipient Mode: {recipient_mode_display}
 Separators: {', '.join(repr(s) for s in config.separator_chars) if config.separator_chars else 'None'}
 Row Consolidation: {'Enabled' if config.consolidate_rows_by_recipient else 'Disabled'}
 
@@ -2477,6 +2495,27 @@ The program will now use these settings for extracting email addresses."""
         else:
             self.attachment_info_label.setText("No files")
             self.attachment_info_label.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 8pt; padding: 2px;")
+    
+    def open_drag_drop_window(self):
+        """Open the drag-and-drop attachments window"""
+        window = DragDropAttachmentsWindow(
+            existing_attachments=self.attachments,
+            recipients_data=self.imported_data,
+            headers=self.headers,
+            parent=self
+        )
+        window.files_added.connect(self.on_drag_drop_files_added)
+        window.exec_()
+    
+    def on_drag_drop_files_added(self, files):
+        """Handle files added from the drag-drop window"""
+        if files:
+            for file_path in files:
+                if file_path not in self.attachments:
+                    self.attachments.append(file_path)
+            self.update_attachments_display()
+            self.statusBar().showMessage(f"Added {len(files)} attachment(s)")
+    
     def closeEvent(self, event):
         """Handle window close event"""
         logger.info("Application closing...")

@@ -1,14 +1,13 @@
 """
-Email Configuration Wizard - PyQt5 GUI Implementation
-Interactive dialog for configuring email extraction from imported data
+Email Configuration Wizard - Refactored PyQt5 Implementation
+New workflow: Recipient type → Email columns → Name columns → Separators → Cell combination → Customizations
 """
-import re
 from typing import List, Optional
 from dataclasses import dataclass
 from PyQt5.QtWidgets import (
     QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, 
     QCheckBox, QLineEdit, QTableWidget, QTableWidgetItem, 
-    QGroupBox, QMessageBox, QComboBox, QScrollArea
+    QGroupBox, QMessageBox, QComboBox, QScrollArea, QRadioButton
 )
 from PyQt5.QtCore import pyqtSignal, Qt
 from .theme import var_theme, get_button_style, get_table_style
@@ -18,29 +17,33 @@ from .theme import var_theme, get_button_style, get_table_style
 class EmailConfig:
     """Configuration for email extraction from data"""
     email_columns: List[int]
-    multiple_emails_per_row: bool
+    name_columns: List[int]
+    recipient_mode: str  # "same_in_different_columns" or "multiple_in_one_cell"
     separator_chars: List[str]
-    email_template: str
-    send_multiple_together: bool = False  # True: send one email to all addresses, False: send separate emails
-    custom_validators: Optional[List[str]] = None
-    placeholder_columns: Optional[dict] = None  # Maps placeholder_name -> List[column_indices]
-    consolidate_rows_by_recipient: bool = False  # NEW: Group multiple rows by recipient email
-    consolidation_recipient_column: Optional[int] = None  # NEW: Which column identifies recipient
-    consolidation_data_columns: Optional[List[int]] = None  # NEW: Which columns to consolidate
+    send_multiple_together: bool = False
+    consolidate_rows_by_recipient: bool = False
+    consolidation_recipient_column: Optional[int] = None
+    consolidation_data_columns: Optional[List[int]] = None
+    consolidation_combination_mode: str = "one_cell"  # "one_cell" or "multiple_columns"
+    consolidation_selected_columns: Optional[List[int]] = None  # Columns to consolidate
+    consolidation_column_grouping: Optional[dict] = None  # {column: "separate" or group_number}
+    cell_combination_mode: str = "keep_separate"  # "combine_one" or "keep_separate" or "custom_names"
+    custom_combined_column_names: Optional[List[str]] = None
     
     def to_dict(self):
         """Convert to dictionary for persistence"""
         return {
             'email_columns': self.email_columns,
-            'multiple_emails_per_row': self.multiple_emails_per_row,
+            'name_columns': self.name_columns,
+            'recipient_mode': self.recipient_mode,
             'separator_chars': self.separator_chars,
-            'email_template': self.email_template,
             'send_multiple_together': self.send_multiple_together,
-            'custom_validators': self.custom_validators or [],
-            'placeholder_columns': self.placeholder_columns or {},
             'consolidate_rows_by_recipient': self.consolidate_rows_by_recipient,
             'consolidation_recipient_column': self.consolidation_recipient_column,
-            'consolidation_data_columns': self.consolidation_data_columns or []
+            'consolidation_data_columns': self.consolidation_data_columns or [],
+            'consolidation_combination_mode': self.consolidation_combination_mode,
+            'cell_combination_mode': self.cell_combination_mode,
+            'custom_combined_column_names': self.custom_combined_column_names or []
         }
     
     @classmethod
@@ -48,20 +51,21 @@ class EmailConfig:
         """Create from dictionary"""
         return cls(
             email_columns=data.get('email_columns', []),
-            multiple_emails_per_row=data.get('multiple_emails_per_row', False),
+            name_columns=data.get('name_columns', []),
+            recipient_mode=data.get('recipient_mode', 'same_in_different_columns'),
             separator_chars=data.get('separator_chars', []),
-            email_template=data.get('email_template', r'^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$'),
             send_multiple_together=data.get('send_multiple_together', False),
-            custom_validators=data.get('custom_validators', []),
-            placeholder_columns=data.get('placeholder_columns', {}),
             consolidate_rows_by_recipient=data.get('consolidate_rows_by_recipient', False),
             consolidation_recipient_column=data.get('consolidation_recipient_column'),
-            consolidation_data_columns=data.get('consolidation_data_columns', [])
+            consolidation_data_columns=data.get('consolidation_data_columns', []),
+            consolidation_combination_mode=data.get('consolidation_combination_mode', 'one_cell'),
+            cell_combination_mode=data.get('cell_combination_mode', 'keep_separate'),
+            custom_combined_column_names=data.get('custom_combined_column_names', [])
         )
 
 
 class EmailConfigurationWizard(QDialog):
-    """Interactive PyQt5 dialog for email extraction configuration"""
+    """Interactive PyQt5 dialog for email extraction configuration with refactored workflow"""
     
     configuration_complete = pyqtSignal(EmailConfig)
     
@@ -72,32 +76,32 @@ class EmailConfigurationWizard(QDialog):
         self.config = None
         self.current_step = 1
         
-        # State tracking (persists across step navigation)
-        self.selected_email_columns = {}  # Column index -> checked state
-        self.multiple_emails_enabled = False
-        self.send_multiple_together = True  # Default to True (Send Together), can be changed in Step 3
-        self.selected_separators = {}  # Separator -> checked state
-        self.template_text = r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$"  # Email validation regex
-        
-        # NEW: Consolidation state
+        # State tracking
+        self.recipient_mode = None
+        self.selected_email_columns = {}
+        self.selected_name_columns = {}
+        self.selected_separators = {}
+        self.send_multiple_together = False
         self.consolidate_enabled = False
         self.consolidation_recipient_column = None
-        self.consolidation_data_columns = {}  # Column index -> checked state
+        self.consolidation_data_columns = {}
+        self.consolidation_combination_mode = "one_cell"  # "one_cell" or "multiple_columns"
+        self.cell_combination_mode = "keep_separate"
+        self.custom_combined_names = {}
+        self.consolidation_columns_checkboxes = {}
         
-        # Widget references for current step
+        # Widget references
         self.column_checkboxes = {}
         self.separator_checkboxes = {}
-        self.multiple_emails_checkbox = None
-        self.template_input = None
         
-        self.setWindowTitle("Email Extraction Configuration Wizard")
+        self.setWindowTitle("Email Configuration Wizard")
         self.setGeometry(100, 100, 1000, 800)
         self.setMinimumWidth(1000)
         self.setMinimumHeight(800)
         self.setModal(True)
         
         self.setup_ui()
-        
+    
     def setup_ui(self):
         """Setup the main dialog UI"""
         layout = QVBoxLayout(self)
@@ -105,18 +109,18 @@ class EmailConfigurationWizard(QDialog):
         layout.setSpacing(15)
         
         # Header
-        header = QLabel("EMAIL EXTRACTION CONFIGURATION WIZARD")
+        header = QLabel("EMAIL CONFIGURATION WIZARD")
         header.setFont(var_theme.get_font(18, 'bold'))
         header.setStyleSheet(f"color: {var_theme.colors['button_primary']}; padding: 10px 0px;")
         layout.addWidget(header)
         
         # Step indicator
-        self.step_label = QLabel("Step 1/5: Select Email Columns")
+        self.step_label = QLabel("Step 1/6: Recipient Distribution")
         self.step_label.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 12pt;")
         self.step_label.setMinimumHeight(25)
         layout.addWidget(self.step_label)
         
-        # Content area with scroll support (will be replaced with each step)
+        # Content area
         self.content_area = QWidget()
         self.content_layout = QVBoxLayout(self.content_area)
         self.content_layout.setContentsMargins(0, 0, 0, 0)
@@ -158,44 +162,83 @@ class EmailConfigurationWizard(QDialog):
         
         # Display first step
         self.show_step_1()
-        
+    
     def clear_content(self):
         """Clear content area"""
-        # Save widget states before deleting
-        if self.column_checkboxes:
-            self.selected_email_columns = {col: cb.isChecked() for col, cb in self.column_checkboxes.items()}
-        if self.separator_checkboxes:
-            self.selected_separators = {sep: cb.isChecked() for sep, cb in self.separator_checkboxes.items()}
-        if self.template_input:
-            self.template_text = self.template_input.text()
-        
-        # Clear and delete widgets
         while self.content_layout.count():
             item = self.content_layout.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
-        
-        # Clear widget references
         self.column_checkboxes = {}
         self.separator_checkboxes = {}
-        self.multiple_emails_checkbox = None
-        self.template_input = None
     
     def show_step_1(self):
-        """Step 1: Select email columns"""
+        """Step 1: Recipient distribution type"""
         self.clear_content()
         self.current_step = 1
-        self.step_label.setText("Step 1/5: Select Email Columns")
+        self.step_label.setText("Step 1/6: Recipient Distribution")
         self.back_btn.setEnabled(False)
-        self.next_btn.setText("Next →")
         
-        group = QGroupBox("Which columns contain email addresses?")
+        group = QGroupBox("How are recipients distributed in your data?")
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(15)
+        
+        info = QLabel(
+            "Choose how recipients are organized in your data:\n\n"
+            "Option A: Same recipients in different columns\n"
+            "  Example: Column 'Email1', 'Email2', 'Email3' each have one email\n\n"
+            "Option B: Multiple recipients in one cell\n"
+            "  Example: Column 'Emails' contains 'john@ex.com; jane@ex.com'"
+        )
+        info.setStyleSheet(f"color: {var_theme.colors['text_secondary']}; padding: 12px; background-color: {var_theme.colors['secondary_bg']}; border-radius: 4px; font-size: 11pt;")
+        info.setWordWrap(True)
+        info.setMinimumHeight(100)
+        layout.addWidget(info)
+        
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        btn_a = QPushButton("Same recipient in rows")
+        btn_a.setStyleSheet(get_button_style('primary'))
+        btn_a.setMinimumWidth(180)
+        btn_a.setMinimumHeight(50)
+        btn_a.clicked.connect(lambda: self.select_recipient_mode("same_in_different_columns"))
+        button_layout.addWidget(btn_a)
+        
+        btn_b = QPushButton("Multiple recipient in one cell")
+        btn_b.setStyleSheet(get_button_style('primary'))
+        btn_b.setMinimumWidth(180)
+        btn_b.setMinimumHeight(50)
+        btn_b.clicked.connect(lambda: self.select_recipient_mode("multiple_in_one_cell"))
+        button_layout.addWidget(btn_b)
+        
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+        layout.addStretch()
+        
+        group.setLayout(layout)
+        self.content_layout.addWidget(group)
+    
+    def select_recipient_mode(self, mode):
+        """Set recipient mode and proceed to next step"""
+        self.recipient_mode = mode
+        self.show_step_2()
+    
+    def show_step_2(self):
+        """Step 2: Select email column(s)"""
+        self.clear_content()
+        self.current_step = 2
+        self.step_label.setText("Step 2/6: Select Email Column(s)")
+        self.back_btn.setEnabled(True)
+        
+        group = QGroupBox("Which column(s) contain email addresses?")
         layout = QVBoxLayout(group)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
         
-        # Preview table
-        info_label = QLabel("Preview of your imported data (first 5 rows):")
+        # Data preview
+        info_label = QLabel("Preview of your data (first 5 rows):")
         info_label.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 11pt; font-weight: bold;")
         layout.addWidget(info_label)
         
@@ -203,22 +246,19 @@ class EmailConfigurationWizard(QDialog):
         table.setColumnCount(len(self.headers))
         table.setHorizontalHeaderLabels(self.headers)
         table.setStyleSheet(get_table_style())
-        table.setMaximumHeight(180)
-        table.setMinimumHeight(180)
+        table.setMaximumHeight(150)
         
-        # Add preview data (max 5 rows)
         for row_idx, row in enumerate(self.data[:5]):
             table.insertRow(row_idx)
             for col_idx, cell in enumerate(row):
-                item = QTableWidgetItem(str(cell)[:50])
+                item = QTableWidgetItem(str(cell)[:40])
                 table.setItem(row_idx, col_idx, item)
         
-        # Resize columns to content
         table.resizeColumnsToContents()
         layout.addWidget(table)
         
         # Column selection
-        select_label = QLabel("Select columns containing emails (check boxes):")
+        select_label = QLabel("Select column(s) with emails:")
         select_label.setStyleSheet(f"font-weight: bold; font-size: 11pt;")
         layout.addWidget(select_label)
         
@@ -229,7 +269,6 @@ class EmailConfigurationWizard(QDialog):
         for col_idx, header in enumerate(self.headers):
             checkbox = QCheckBox(f"Column {col_idx}: {header}")
             checkbox.setMinimumHeight(24)
-            # Restore previous state if available
             if col_idx in self.selected_email_columns:
                 checkbox.setChecked(self.selected_email_columns[col_idx])
             self.column_checkboxes[col_idx] = checkbox
@@ -241,541 +280,567 @@ class EmailConfigurationWizard(QDialog):
         group.setLayout(layout)
         self.content_layout.addWidget(group)
     
-    def show_step_2(self):
-        """Step 2: Multiple emails per row - YES/NO buttons"""
-        self.clear_content()
-        self.current_step = 2
-        self.step_label.setText("Step 2/5: Multiple Emails Per Row")
-        self.back_btn.setEnabled(True)
-        self.next_btn.setText("Next →")
-        
-        group = QGroupBox("Can a single row contain MULTIPLE email addresses?")
-        layout = QVBoxLayout(group)
-        layout.setContentsMargins(16, 16, 16, 16)
-        layout.setSpacing(20)
-        
-        info = QLabel(
-            "Some data formats may have multiple recipients in a single cell.\n\n"
-            "Example:\n"
-            "  • YES: 'john@example.com; jane@example.com' (multiple emails in one cell)\n"
-            "  • NO:  Only one email per row/cell"
-        )
-        info.setStyleSheet(f"color: {var_theme.colors['text_secondary']}; padding: 15px; background-color: {var_theme.colors['secondary_bg']}; border-radius: 4px; font-size: 11pt; line-height: 1.5;")
-        info.setWordWrap(True)
-        info.setMinimumHeight(100)
-        layout.addWidget(info)
-        
-        # Yes/No buttons
-        button_layout = QHBoxLayout()
-        button_layout.addStretch()
-        
-        yes_btn = QPushButton("YES")
-        yes_btn.setStyleSheet(get_button_style('success' if self.multiple_emails_enabled else 'default'))
-        yes_btn.setMinimumWidth(150)
-        yes_btn.setMinimumHeight(50)
-        yes_btn.setFont(var_theme.get_font(12, 'bold'))
-        yes_btn.clicked.connect(lambda: self.on_step2_yes_clicked(yes_btn, no_btn))
-        
-        no_btn = QPushButton("NO")
-        no_btn.setStyleSheet(get_button_style('success' if not self.multiple_emails_enabled else 'default'))
-        no_btn.setMinimumWidth(150)
-        no_btn.setMinimumHeight(50)
-        no_btn.setFont(var_theme.get_font(12, 'bold'))
-        no_btn.clicked.connect(lambda: self.on_step2_no_clicked(yes_btn, no_btn))
-        
-        button_layout.addWidget(yes_btn)
-        button_layout.addSpacing(20)
-        button_layout.addWidget(no_btn)
-        button_layout.addStretch()
-        
-        layout.addLayout(button_layout)
-        layout.addStretch()
-        group.setLayout(layout)
-        self.content_layout.addWidget(group)
-    
     def show_step_3(self):
-        """Step 3: Multiple email settings (combined: send mode + separators + validation)"""
+        """Step 3: Select name column(s) (Optional)"""
         self.clear_content()
         self.current_step = 3
-        self.step_label.setText("Step 3/5: Email Settings")
+        self.step_label.setText("Step 3/6: Select Name Column(s) (Optional)")
         self.back_btn.setEnabled(True)
-        self.next_btn.setText("Next →")
         
-        if not self.multiple_emails_enabled:
-            # Single email mode - only show validation template
-            group = QGroupBox("Email Validation Template")
-            layout = QVBoxLayout(group)
-            layout.setContentsMargins(16, 16, 16, 16)
-            layout.setSpacing(12)
-            
-            info = QLabel(
-                "The program validates extracted emails using a regex pattern.\n\n"
-                "Standard format: username@domain.extension\n"
-                "Examples: john@example.com, jane.doe@company.co.uk"
-            )
-            info.setWordWrap(True)
-            info.setMinimumHeight(80)
-            layout.addWidget(info)
-            
-            use_standard = QCheckBox("Use standard email pattern (recommended)")
-            use_standard.setChecked(True)
-            use_standard.setMinimumHeight(24)
-            use_standard.stateChanged.connect(lambda: self.on_template_mode_changed(use_standard))
-            layout.addWidget(use_standard)
-            self.use_standard_template = use_standard
-            
-            template_label = QLabel("Email regex pattern:")
-            template_label.setStyleSheet("font-weight: bold;")
-            self.template_input = QLineEdit()
-            self.template_input.setText(self.template_text)
-            self.template_input.setReadOnly(True)
-            self.template_input.setMinimumHeight(35)
-            layout.addWidget(template_label)
-            layout.addWidget(self.template_input)
-            
-            layout.addStretch()
-            group.setLayout(layout)
-            self.content_layout.addWidget(group)
-        else:
-            # Multiple emails mode - show all settings in one view using tabs or groups
-            main_group = QGroupBox("Multiple Email Processing Settings")
-            main_layout = QVBoxLayout(main_group)
-            main_layout.setContentsMargins(16, 16, 16, 16)
-            main_layout.setSpacing(15)
-            
-            # Send mode section
-            send_mode_group = QGroupBox("How should multiple emails be sent?")
-            send_layout = QVBoxLayout(send_mode_group)
-            send_layout.setContentsMargins(12, 12, 12, 12)
-            send_layout.setSpacing(10)
-            
-            info = QLabel(
-                "• TOGETHER: Send ONE email to all addresses at once (using CC/BCC)\n"
-                "  Best for: Group notifications, announcements\n\n"
-                "• SEPARATE: Send individual emails to each address\n"
-                "  Best for: Personalized mail merge with multiple recipients per row"
-            )
-            info.setWordWrap(True)
-            info.setMinimumHeight(90)
-            send_layout.addWidget(info)
-            
-            together_radio = QCheckBox("Send TOGETHER (one email to all addresses in the row)")
-            together_radio.setChecked(self.send_multiple_together)
-            together_radio.setMinimumHeight(24)
-            together_radio.setStyleSheet("padding: 8px;")
-            
-            separate_radio = QCheckBox("Send SEPARATE (individual email to each address)")
-            separate_radio.setChecked(not self.send_multiple_together)
-            separate_radio.setMinimumHeight(24)
-            separate_radio.setStyleSheet("padding: 8px;")
-            
-            def on_together_changed(checked):
-                if checked:
-                    separate_radio.blockSignals(True)
-                    separate_radio.setChecked(False)
-                    separate_radio.blockSignals(False)
-                    self.send_multiple_together = True
-            
-            def on_separate_changed(checked):
-                if checked:
-                    together_radio.blockSignals(True)
-                    together_radio.setChecked(False)
-                    together_radio.blockSignals(False)
-                    self.send_multiple_together = False
-            
-            together_radio.stateChanged.connect(on_together_changed)
-            separate_radio.stateChanged.connect(on_separate_changed)
-            
-            send_layout.addWidget(together_radio)
-            send_layout.addWidget(separate_radio)
-            send_mode_group.setLayout(send_layout)
-            main_layout.addWidget(send_mode_group)
-            
-            # Separators section
-            sep_group = QGroupBox("What separates multiple emails in a cell?")
-            sep_layout = QVBoxLayout(sep_group)
-            sep_layout.setContentsMargins(12, 12, 12, 12)
-            sep_layout.setSpacing(10)
-            
-            sep_info = QLabel(
-                "Common separators:\n"
-                "  • Semicolon (;) - 'email1@domain.com; email2@domain.com'\n"
-                "  • Comma (,) - 'email1@domain.com,email2@domain.com'\n"
-                "  • Pipe (|) - 'email1@domain.com|email2@domain.com'\n"
-                "  • Space - separated by whitespace"
-            )
-            sep_info.setWordWrap(True)
-            sep_layout.addWidget(sep_info)
-            
-            self.separator_checkboxes = {
-                ';': QCheckBox("Semicolon (;)"),
-                ',': QCheckBox("Comma (,)"),
-                '|': QCheckBox("Pipe (|)"),
-                ' ': QCheckBox("Space ( )")
-            }
-            
-            # Restore previous state or use defaults
-            if self.selected_separators:
-                for sep, checkbox in self.separator_checkboxes.items():
-                    checkbox.setChecked(self.selected_separators.get(sep, False))
-            else:
-                self.separator_checkboxes[';'].setChecked(True)
-            
-            for sep, checkbox in self.separator_checkboxes.items():
-                checkbox.setMinimumHeight(24)
-                sep_layout.addWidget(checkbox)
-            
-            sep_group.setLayout(sep_layout)
-            main_layout.addWidget(sep_group)
-            
-            # Validation template section
-            template_group = QGroupBox("Email Validation Template")
-            template_layout = QVBoxLayout(template_group)
-            template_layout.setContentsMargins(12, 12, 12, 12)
-            template_layout.setSpacing(10)
-            
-            template_info = QLabel(
-                "The program validates extracted emails using a regex pattern.\n\n"
-                "Standard format: username@domain.extension"
-            )
-            template_info.setWordWrap(True)
-            template_layout.addWidget(template_info)
-            
-            use_standard = QCheckBox("Use standard email pattern (recommended)")
-            use_standard.setChecked(True)
-            use_standard.setMinimumHeight(24)
-            use_standard.stateChanged.connect(lambda: self.on_template_mode_changed(use_standard))
-            template_layout.addWidget(use_standard)
-            self.use_standard_template = use_standard
-            
-            template_label = QLabel("Email regex pattern:")
-            template_label.setStyleSheet("font-weight: bold;")
-            self.template_input = QLineEdit()
-            self.template_input.setText(self.template_text)
-            self.template_input.setReadOnly(True)
-            self.template_input.setMinimumHeight(35)
-            template_layout.addWidget(template_label)
-            template_layout.addWidget(self.template_input)
-            
-            template_group.setLayout(template_layout)
-            main_layout.addWidget(template_group)
-            
-            main_layout.addStretch()
-            main_group.setLayout(main_layout)
-            self.content_layout.addWidget(main_group)
-    
-    def show_step_4(self):
-        """Step 4: Consolidate multiple rows by recipient (formerly step 7)"""
-        self.clear_content()
-        self.current_step = 4
-        self.step_label.setText("Step 4/5: Consolidate Rows by Recipient")
-        self.back_btn.setEnabled(True)
-        self.next_btn.setText("Next →")
-        
-        group = QGroupBox("Consolidate Multiple Rows to Same Recipient")
+        group = QGroupBox("Which column(s) contain recipient names? (Optional)")
         layout = QVBoxLayout(group)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
         
-        # Enable/disable consolidation
-        info_label = QLabel(
-            "If enabled, multiple rows with the same email recipient will be consolidated into one email.\n"
-            "You can choose which columns contain the data to consolidate (e.g., folder names, paths, etc.)."
-        )
-        info_label.setWordWrap(True)
-        info_label.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 10pt;")
-        info_label.setMinimumHeight(60)
-        layout.addWidget(info_label)
+        info = QLabel("Select columns that contain recipient names or leave unchecked if no name columns exist.")
+        info.setWordWrap(True)
+        info.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 10pt;")
+        layout.addWidget(info)
         
-        consolidate_checkbox = QCheckBox("Enable row consolidation by recipient")
-        consolidate_checkbox.setChecked(self.consolidate_enabled)
-        consolidate_checkbox.setMinimumHeight(24)
-        consolidate_checkbox.stateChanged.connect(self.on_consolidate_toggled)
-        layout.addWidget(consolidate_checkbox)
-        self.consolidate_checkbox = consolidate_checkbox
+        # Data preview
+        table = QTableWidget()
+        table.setColumnCount(len(self.headers))
+        table.setHorizontalHeaderLabels(self.headers)
+        table.setStyleSheet(get_table_style())
+        table.setMaximumHeight(150)
         
-        # Recipient column selection
-        recipient_group = QGroupBox("Select Recipient Identifier Column")
-        recipient_layout = QVBoxLayout(recipient_group)
-        recipient_layout.setContentsMargins(12, 12, 12, 12)
-        recipient_layout.setSpacing(10)
+        for row_idx, row in enumerate(self.data[:5]):
+            table.insertRow(row_idx)
+            for col_idx, cell in enumerate(row):
+                item = QTableWidgetItem(str(cell)[:40])
+                table.setItem(row_idx, col_idx, item)
         
-        recipient_info = QLabel("Which column contains the recipient email address?")
-        recipient_info.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 10pt;")
-        recipient_layout.addWidget(recipient_info)
+        table.resizeColumnsToContents()
+        layout.addWidget(table)
         
-        self.recipient_column_combo = QComboBox()
-        self.recipient_column_combo.addItem("-- Select Column --", -1)
-        for idx, header in enumerate(self.headers):
-            self.recipient_column_combo.addItem(header, idx)
+        # Name column selection
+        select_label = QLabel("Select column(s) with names:")
+        select_label.setStyleSheet(f"font-weight: bold; font-size: 11pt;")
+        layout.addWidget(select_label)
         
-        if self.consolidation_recipient_column is not None and 0 <= self.consolidation_recipient_column < len(self.headers):
-            self.recipient_column_combo.setCurrentIndex(self.consolidation_recipient_column + 1)
+        self.name_checkboxes = {}
+        names_layout = QVBoxLayout()
+        names_layout.setSpacing(8)
         
-        self.recipient_column_combo.setMinimumHeight(35)
-        self.recipient_column_combo.currentIndexChanged.connect(
-            lambda: setattr(self, 'consolidation_recipient_column', self.recipient_column_combo.currentData())
-        )
-        recipient_layout.addWidget(self.recipient_column_combo)
-        recipient_group.setLayout(recipient_layout)
-        layout.addWidget(recipient_group)
-        
-        # Data columns selection
-        data_group = QGroupBox("Select Columns to Consolidate")
-        data_layout = QVBoxLayout(data_group)
-        data_layout.setContentsMargins(12, 12, 12, 12)
-        data_layout.setSpacing(10)
-        
-        data_info = QLabel(
-            "Which columns should be combined when multiple rows have the same recipient?\n"
-            "(e.g., folder names, paths, or other data to aggregate)"
-        )
-        data_info.setWordWrap(True)
-        data_info.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 10pt;")
-        data_info.setMinimumHeight(50)
-        data_layout.addWidget(data_info)
-        
-        # Create checkboxes for each column
-        self.consolidation_data_checkboxes = {}
-        for idx, header in enumerate(self.headers):
-            checkbox = QCheckBox(header)
+        for col_idx, header in enumerate(self.headers):
+            checkbox = QCheckBox(f"Column {col_idx}: {header}")
             checkbox.setMinimumHeight(24)
-            if idx in self.consolidation_data_columns:
-                checkbox.setChecked(True)
-            self.consolidation_data_checkboxes[idx] = checkbox
-            data_layout.addWidget(checkbox)
+            if col_idx in self.selected_name_columns:
+                checkbox.setChecked(self.selected_name_columns[col_idx])
+            self.name_checkboxes[col_idx] = checkbox
+            names_layout.addWidget(checkbox)
         
-        # Save consolidation data column selections when checkboxes change
-        for idx, checkbox in self.consolidation_data_checkboxes.items():
-            checkbox.stateChanged.connect(
-                lambda state, i=idx: self._update_consolidation_data_columns()
-            )
+        layout.addLayout(names_layout)
+        layout.addStretch()
         
-        data_layout.addStretch()
-        data_group.setLayout(data_layout)
-        layout.addWidget(data_group)
+        group.setLayout(layout)
+        self.content_layout.addWidget(group)
+    
+    def show_step_4(self):
+        """Step 4: Separator options (if multiple emails in one cell)"""
+        if self.recipient_mode == "same_in_different_columns":
+            # Skip to step 5 for this mode
+            self.show_step_5()
+            return
         
-        # Enable/disable data columns based on consolidation checkbox
-        self._update_consolidation_ui_state()
+        self.clear_content()
+        self.current_step = 4
+        self.step_label.setText("Step 4/6: Email Separators")
+        self.back_btn.setEnabled(True)
+        
+        group = QGroupBox("What separates multiple emails in a cell?")
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+        
+        info = QLabel(
+            "Select the character(s) that separate multiple emails:\n"
+            "  • Semicolon (;) - 'email1@ex.com; email2@ex.com'\n"
+            "  • Comma (,) - 'email1@ex.com,email2@ex.com'\n"
+            "  • Pipe (|) - 'email1@ex.com|email2@ex.com'\n"
+            "  • Space - separated by whitespace"
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 10pt;")
+        layout.addWidget(info)
+        
+        self.separator_checkboxes = {
+            ';': QCheckBox("Semicolon (;)"),
+            ',': QCheckBox("Comma (,)"),
+            '|': QCheckBox("Pipe (|)"),
+            ' ': QCheckBox("Space ( )")
+        }
+        
+        if self.selected_separators:
+            for sep, checkbox in self.separator_checkboxes.items():
+                checkbox.setChecked(self.selected_separators.get(sep, False))
+        else:
+            self.separator_checkboxes[';'].setChecked(True)
+        
+        for sep, checkbox in self.separator_checkboxes.items():
+            checkbox.setMinimumHeight(24)
+            layout.addWidget(checkbox)
         
         layout.addStretch()
         group.setLayout(layout)
         self.content_layout.addWidget(group)
     
     def show_step_5(self):
-        """Step 5: Review and apply configuration"""
+        """Step 5: Cell combination options"""
         self.clear_content()
         self.current_step = 5
-        self.step_label.setText("Step 5/5: Review & Apply Configuration")
+        self.step_label.setText("Step 5/6: Cell Combination")
         self.back_btn.setEnabled(True)
-        self.next_btn.setText("[OK] Apply Configuration")
         
-        group = QGroupBox("Review Your Configuration")
+        # Only show if multiple email columns selected
+        selected_email_cols = [col for col, checked in self.selected_email_columns.items() if checked]
+        
+        if len(selected_email_cols) <= 1:
+            # Skip to step 6
+            self.show_step_6()
+            return
+        
+        group = QGroupBox("How should multiple email columns be combined?")
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(15)
+        
+        info = QLabel(
+            "You selected multiple email columns. Choose how to handle them:\n"
+            f"  • Option A: Combine into ONE column\n"
+            f"  • Option B: Keep as SEPARATE columns with custom names"
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 10pt;")
+        layout.addWidget(info)
+        
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        btn_combine = QPushButton("Option A: Combine into One")
+        btn_combine.setStyleSheet(get_button_style('primary'))
+        btn_combine.setMinimumWidth(150)
+        btn_combine.setMinimumHeight(45)
+        btn_combine.clicked.connect(lambda: self.set_combination_mode("combine_one"))
+        button_layout.addWidget(btn_combine)
+        
+        btn_keep = QPushButton("Option B: Keep Separate + Custom Names")
+        btn_keep.setStyleSheet(get_button_style('primary'))
+        btn_keep.setMinimumWidth(200)
+        btn_keep.setMinimumHeight(45)
+        btn_keep.clicked.connect(lambda: self.set_combination_mode("custom_names"))
+        button_layout.addWidget(btn_keep)
+        
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+        layout.addStretch()
+        
+        group.setLayout(layout)
+        self.content_layout.addWidget(group)
+    
+    def set_combination_mode(self, mode):
+        """Set combination mode and proceed"""
+        self.cell_combination_mode = mode
+        if mode == "custom_names":
+            self.show_step_5_custom_names()
+        else:
+            self.show_step_5_5()  # Ask about consolidation
+    
+    def show_step_5_5(self):
+        """Step 5.5: Enable/Disable consolidation (only for same_in_different_columns mode)"""
+        if self.recipient_mode != "same_in_different_columns":
+            self.show_step_6()
+            return
+        
+        self.clear_content()
+        self.current_step = 5
+        self.step_label.setText("Step 5.5/8: Row Consolidation")
+        self.back_btn.setEnabled(True)
+        
+        group = QGroupBox("Enable Row Consolidation (Optional)")
+        layout = QVBoxLayout(group)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(15)
+        
+        info = QLabel(
+            "Row consolidation combines multiple rows with the same value in a selected column into a single row.\n\n"
+            "Example: If you have multiple orders from the same customer, consolidate them into one row "
+            "with all order data combined.\n\n"
+            "Note: This is optional. You can skip this step and go directly to final customizations."
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 10pt;")
+        layout.addWidget(info)
+        
+        button_layout = QHBoxLayout()
+        button_layout.addStretch()
+        
+        btn_enable = QPushButton("Enable Consolidation")
+        btn_enable.setStyleSheet(get_button_style('primary'))
+        btn_enable.setMinimumWidth(150)
+        btn_enable.setMinimumHeight(45)
+        btn_enable.clicked.connect(self.enable_consolidation)
+        button_layout.addWidget(btn_enable)
+        
+        btn_skip = QPushButton("Skip (No Consolidation)")
+        btn_skip.setStyleSheet(get_button_style('default'))
+        btn_skip.setMinimumWidth(150)
+        btn_skip.setMinimumHeight(45)
+        btn_skip.clicked.connect(self.skip_consolidation)
+        button_layout.addWidget(btn_skip)
+        
+        button_layout.addStretch()
+        layout.addLayout(button_layout)
+        layout.addStretch()
+        
+        group.setLayout(layout)
+        self.content_layout.addWidget(group)
+    
+    def enable_consolidation(self):
+        """Enable consolidation and show column selection"""
+        self.consolidate_enabled = True
+        self.show_step_6()
+    
+    def skip_consolidation(self):
+        """Skip consolidation and go to final customizations"""
+        self.consolidate_enabled = False
+        self.consolidation_recipient_column = None
+        self.consolidation_combination_mode = "one_cell"
+        self.show_step_8()
+    
+    def show_step_5_custom_names(self):
+        """Step 5B: Enter custom names for combined columns"""
+        self.clear_content()
+        self.step_label.setText("Step 5B/6: Custom Column Names")
+        self.back_btn.setEnabled(True)
+        
+        selected_email_cols = sorted([col for col, checked in self.selected_email_columns.items() if checked])
+        
+        group = QGroupBox("Enter custom names for email columns")
         layout = QVBoxLayout(group)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
         
-        # Build configuration summary
-        self.config = self.build_configuration()
+        info = QLabel("Enter a name for each email column (or leave as-is to keep original names):")
+        info.setWordWrap(True)
+        layout.addWidget(info)
         
-        summary_text = f"""Email Columns:              {self.config.email_columns}
-Multiple Emails:            {'Yes' if self.config.multiple_emails_per_row else 'No'}
-Send Mode:                  {'Together (one email to all)' if self.config.send_multiple_together else 'Separate (individual emails)'}
-Separators:                 {', '.join(repr(s) for s in self.config.separator_chars) if self.config.separator_chars else 'None'}
-Row Consolidation:          {'Enabled' if self.config.consolidate_rows_by_recipient else 'Disabled'}
-Consolidation Recipient:    {self.headers[self.config.consolidation_recipient_column] if self.config.consolidation_recipient_column is not None else 'Not set'}
-Data Columns to Consolidate: {', '.join(self.headers[i] for i in self.config.consolidation_data_columns) if self.config.consolidation_data_columns else 'None'}"""
+        self.custom_name_inputs = {}
         
-        summary_label = QLabel("Configuration Summary:")
-        summary_label.setStyleSheet("font-weight: bold; font-size: 11pt;")
-        summary_display = QLabel(summary_text)
-        summary_display.setStyleSheet(f"background-color: {var_theme.colors['secondary_bg']}; padding: 15px; border-radius: 4px; font-family: 'Courier New'; font-size: 10pt; line-height: 1.6;")
-        summary_display.setWordWrap(True)
-        summary_display.setMinimumHeight(150)
-        layout.addWidget(summary_label)
-        layout.addWidget(summary_display)
-        
-        # Test extraction
-        test_label = QLabel("Email Extraction Test:")
-        test_label.setStyleSheet("font-weight: bold; font-size: 11pt;")
-        layout.addWidget(test_label)
-        
-        extracted_emails = self.extract_emails_preview()
-        
-        if extracted_emails:
-            result_text = f"Found {len(extracted_emails)} email(s):\n\n" + "\n".join(f"  [OK] {email}" for email in extracted_emails[:10])
-            if len(extracted_emails) > 10:
-                result_text += f"\n  ... and {len(extracted_emails) - 10} more"
-        else:
-            result_text = "[WARNING] No valid emails found. Please review your configuration."
-        
-        result_display = QLabel(result_text)
-        result_display.setStyleSheet(f"background-color: {var_theme.colors['secondary_bg']}; padding: 15px; border-radius: 4px;")
-        result_display.setWordWrap(True)
-        result_display.setMinimumHeight(100)
-        layout.addWidget(result_display)
+        for col_idx in selected_email_cols:
+            input_layout = QHBoxLayout()
+            label = QLabel(f"Column {col_idx} ({self.headers[col_idx]}):")
+            label.setMinimumWidth(150)
+            
+            input_field = QLineEdit()
+            input_field.setPlaceholderText(f"e.g., Email {col_idx + 1}")
+            if col_idx in self.custom_combined_names:
+                input_field.setText(self.custom_combined_names[col_idx])
+            
+            self.custom_name_inputs[col_idx] = input_field
+            input_layout.addWidget(label)
+            input_layout.addWidget(input_field)
+            layout.addLayout(input_layout)
         
         layout.addStretch()
         group.setLayout(layout)
         self.content_layout.addWidget(group)
+        
+        # Update back button
+        self.back_btn.clicked.disconnect()
+        self.back_btn.clicked.connect(self.show_step_5)
+    
+    def show_step_6(self):
+        """Step 6: Consolidation configuration (if enabled)"""
+        # Check if consolidation is enabled
+        if self.recipient_mode == "same_in_different_columns":
+            if not self.consolidate_enabled:
+                # Skip to final customizations
+                self.show_step_7()
+                return
+            
+            self.clear_content()
+            self.current_step = 6
+            self.step_label.setText("Step 6/8: Select Consolidation Column")
+            self.back_btn.setEnabled(True)
+            
+            group = QGroupBox("Which column contains the data to consolidate on?")
+            layout = QVBoxLayout(group)
+            layout.setContentsMargins(16, 16, 16, 16)
+            layout.setSpacing(12)
+            
+            info = QLabel(
+                "Select ONE column that contains duplicate values to identify rows to consolidate.\n"
+                "For example, select a 'Name' or 'ID' column where same values appear multiple times.\n"
+                "Rows with the same value in this column will be combined into one row."
+            )
+            info.setWordWrap(True)
+            info.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 10pt;")
+            layout.addWidget(info)
+            
+            # Data preview
+            table = QTableWidget()
+            table.setColumnCount(len(self.headers))
+            table.setHorizontalHeaderLabels(self.headers)
+            table.setStyleSheet(get_table_style())
+            table.setMaximumHeight(150)
+            
+            for row_idx, row in enumerate(self.data[:5]):
+                table.insertRow(row_idx)
+                for col_idx, cell in enumerate(row):
+                    item = QTableWidgetItem(str(cell)[:40])
+                    table.setItem(row_idx, col_idx, item)
+            
+            table.resizeColumnsToContents()
+            layout.addWidget(table)
+            
+            # Column selection (radio buttons - only one can be selected)
+            select_label = QLabel("Select column to consolidate on:")
+            select_label.setStyleSheet(f"font-weight: bold; font-size: 11pt;")
+            layout.addWidget(select_label)
+            
+            self.consolidation_column_radios = {}
+            columns_layout = QVBoxLayout()
+            columns_layout.setSpacing(8)
+            
+            for col_idx, header in enumerate(self.headers):
+                radio = QRadioButton(f"Column {col_idx}: {header}")
+                radio.setMinimumHeight(24)
+                if col_idx == self.consolidation_recipient_column:
+                    radio.setChecked(True)
+                self.consolidation_column_radios[col_idx] = radio
+                columns_layout.addWidget(radio)
+            
+            layout.addLayout(columns_layout)
+            layout.addStretch()
+            
+            group.setLayout(layout)
+            self.content_layout.addWidget(group)
+        else:
+            # For "multiple_in_one_cell" mode, skip to final customizations
+            self.show_step_7()
+    
+    def show_step_7(self):
+        """Step 7: Consolidation data combination (if consolidation enabled)"""
+        if self.recipient_mode == "same_in_different_columns" and self.consolidate_enabled:
+            # Check if a consolidation column was selected
+            selected_col = None
+            if hasattr(self, 'consolidation_column_radios'):
+                for col_idx, radio in self.consolidation_column_radios.items():
+                    if radio.isChecked():
+                        selected_col = col_idx
+                        break
+            
+            if selected_col is None:
+                QMessageBox.warning(self, "No Selection", "Please select a column to consolidate on.")
+                return
+            
+            self.consolidation_recipient_column = selected_col
+            
+            self.clear_content()
+            self.current_step = 7
+            self.step_label.setText("Step 7/8: Consolidation Data Combination")
+            self.back_btn.setEnabled(True)
+            
+            group = QGroupBox("How should the other data be combined?")
+            layout = QVBoxLayout(group)
+            layout.setContentsMargins(16, 16, 16, 16)
+            layout.setSpacing(15)
+            
+            info = QLabel(
+                "Choose how to combine data from rows with the same consolidation value:\n\n"
+                "Option A: Combine into ONE column - All data separated by semicolon (;)\n"
+                "Option B: Multiple columns - Keep separate columns with same names as originals"
+            )
+            info.setWordWrap(True)
+            info.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 10pt;")
+            layout.addWidget(info)
+            
+            button_layout = QHBoxLayout()
+            button_layout.addStretch()
+            
+            btn_one_cell = QPushButton("Option A: Combine into One Cell")
+            btn_one_cell.setStyleSheet(get_button_style('primary'))
+            btn_one_cell.setMinimumWidth(200)
+            btn_one_cell.setMinimumHeight(45)
+            btn_one_cell.clicked.connect(lambda: self.set_consolidation_combination_mode("one_cell"))
+            button_layout.addWidget(btn_one_cell)
+            
+            btn_multiple = QPushButton("Option B: Multiple Columns")
+            btn_multiple.setStyleSheet(get_button_style('primary'))
+            btn_multiple.setMinimumWidth(200)
+            btn_multiple.setMinimumHeight(45)
+            btn_multiple.clicked.connect(lambda: self.set_consolidation_combination_mode("multiple_columns"))
+            button_layout.addWidget(btn_multiple)
+            
+            button_layout.addStretch()
+            layout.addLayout(button_layout)
+            layout.addStretch()
+            
+            group.setLayout(layout)
+            self.content_layout.addWidget(group)
+        else:
+            # Skip to final customizations
+            self.show_step_8()
+    
+    def set_consolidation_combination_mode(self, mode):
+        """Set consolidation data combination mode and proceed"""
+        self.consolidation_combination_mode = mode
+        self.show_step_8()
+    
+    def show_step_8(self):
+        """Step 8: Additional customizations"""
+        self.clear_content()
+        self.current_step = 8
+        self.step_label.setText("Step 8/8: Customizations")
         self.back_btn.setEnabled(True)
         self.next_btn.setText("[OK] Apply Configuration")
         
-        group = QGroupBox("Review Your Configuration")
+        group = QGroupBox("Additional Settings")
         layout = QVBoxLayout(group)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(10)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(15)
         
-        # Build configuration summary
-        self.config = self.build_configuration()
+        # Multiple email sending option (only if multiple emails detected)
+        selected_email_cols = [col for col, checked in self.selected_email_columns.items() if checked]
+        if self.recipient_mode == "multiple_in_one_cell" and len(selected_email_cols) > 0:
+            send_group = QGroupBox("Multiple Email Sending Mode")
+            send_layout = QVBoxLayout(send_group)
+            send_layout.setContentsMargins(12, 12, 12, 12)
+            send_layout.setSpacing(10)
+            
+            send_info = QLabel(
+                "• TOGETHER: Send one email to all addresses (CC/BCC)\n"
+                "• SEPARATE: Send individual emails to each address"
+            )
+            send_info.setWordWrap(True)
+            send_layout.addWidget(send_info)
+            
+            together_check = QCheckBox("Send TOGETHER (one email to all)")
+            together_check.setChecked(self.send_multiple_together)
+            together_check.setMinimumHeight(24)
+            
+            separate_check = QCheckBox("Send SEPARATE (individual emails)")
+            separate_check.setChecked(not self.send_multiple_together)
+            separate_check.setMinimumHeight(24)
+            
+            together_check.stateChanged.connect(
+                lambda: separate_check.setChecked(False) if together_check.isChecked() else None
+            )
+            separate_check.stateChanged.connect(
+                lambda: together_check.setChecked(False) if separate_check.isChecked() else None
+            )
+            
+            send_layout.addWidget(together_check)
+            send_layout.addWidget(separate_check)
+            send_group.setLayout(send_layout)
+            layout.addWidget(send_group)
+            
+            self.send_together_check = together_check
         
-        summary_text = f"""
-Email Columns:        {self.config.email_columns}
-Multiple Emails:      {'Yes' if self.config.multiple_emails_per_row else 'No'}
-Send Mode:            {'Together (one email to all)' if self.config.send_multiple_together else 'Separate (individual emails)'}
-Separators:           {', '.join(repr(s) for s in self.config.separator_chars) if self.config.separator_chars else 'None'}
-Template:             Email regex validation active
-        """
-        
-        summary_label = QLabel("Configuration Summary:")
-        summary_display = QLabel(summary_text)
-        summary_display.setStyleSheet(f"background-color: {var_theme.colors['secondary_bg']}; padding: 12px; border-radius: 4px; font-family: monospace;")
-        layout.addWidget(summary_label)
-        layout.addWidget(summary_display)
-        
-        # Test extraction
-        test_label = QLabel("Email Extraction Test:")
-        layout.addWidget(test_label)
-        
-        extracted_emails = self.extract_emails_preview()
-        
-        if extracted_emails:
-            result_text = f"Found {len(extracted_emails)} email(s):\n\n" + "\n".join(f"  [OK] {email}" for email in extracted_emails[:10])
-            if len(extracted_emails) > 10:
-                result_text += f"\n  ... and {len(extracted_emails) - 10} more"
+        # Row consolidation (only available for "same_in_different_columns" mode)
+        if self.recipient_mode == "same_in_different_columns":
+            consolidate_group = QGroupBox("Row Consolidation (Optional)")
+            consolidate_layout = QVBoxLayout(consolidate_group)
+            consolidate_layout.setContentsMargins(12, 12, 12, 12)
+            consolidate_layout.setSpacing(10)
+            
+            consolidate_info = QLabel(
+                "Consolidate multiple rows with the same recipient into a single email.\n"
+                "Useful when you have duplicate recipients with different data."
+            )
+            consolidate_info.setWordWrap(True)
+            consolidate_layout.addWidget(consolidate_info)
+            
+            consolidate_check = QCheckBox("Enable row consolidation")
+            consolidate_check.setChecked(self.consolidate_enabled)
+            consolidate_check.setMinimumHeight(24)
+            consolidate_layout.addWidget(consolidate_check)
+            self.consolidate_check = consolidate_check
+            
+            consolidate_group.setLayout(consolidate_layout)
+            layout.addWidget(consolidate_group)
         else:
-            result_text = "[WARNING] No valid emails found. Please review your configuration."
-        
-        result_display = QLabel(result_text)
-        result_display.setStyleSheet(f"background-color: {var_theme.colors['secondary_bg']}; padding: 12px; border-radius: 4px;")
-        layout.addWidget(result_display)
+            # For "multiple_in_one_cell" mode, set consolidation to False
+            self.consolidate_enabled = False
         
         layout.addStretch()
         group.setLayout(layout)
         self.content_layout.addWidget(group)
     
-    
-    def on_consolidate_toggled(self, state):
-        """Handle consolidation checkbox toggle"""
-        self.consolidate_enabled = (state == 2)  # Qt.Checked = 2
-        self._update_consolidation_ui_state()
-    
-    def _update_consolidation_ui_state(self):
-        """Enable/disable consolidation UI elements based on consolidation checkbox"""
-        if hasattr(self, 'recipient_column_combo'):
-            self.recipient_column_combo.setEnabled(self.consolidate_enabled)
-        if hasattr(self, 'consolidation_data_checkboxes'):
-            for checkbox in self.consolidation_data_checkboxes.values():
-                checkbox.setEnabled(self.consolidate_enabled)
-    
-    def _update_consolidation_data_columns(self):
-        """Update consolidation_data_columns from checkbox states"""
-        if hasattr(self, 'consolidation_data_checkboxes'):
-            self.consolidation_data_columns = {
-                idx: cb.isChecked() for idx, cb in self.consolidation_data_checkboxes.items()
-            }
-    
     def build_configuration(self) -> EmailConfig:
-        """Build EmailConfig from current step selections"""
-        # Get selected columns from saved state
+        """Build EmailConfig from current selections"""
         email_columns = [col for col, checked in self.selected_email_columns.items() if checked]
+        name_columns = [col for col, checked in self.selected_name_columns.items() if checked]
+        separators = [sep for sep, checked in self.separator_checkboxes.items() if checked] if self.separator_checkboxes else []
         
-        # Get multiple emails setting
-        multiple_emails = self.multiple_emails_enabled
+        # Get custom names if applicable
+        custom_names = {}
+        if hasattr(self, 'custom_name_inputs'):
+            custom_names = {col: inp.text() or self.headers[col] for col, inp in self.custom_name_inputs.items()}
         
-        # Get separators from saved state
-        separators = []
-        if multiple_emails:
-            separators = [sep for sep, checked in self.selected_separators.items() if checked]
-        
-        # Get template from saved state (not from widget which may be deleted)
-        template = self.template_text
-        
-        # NEW: Get consolidation settings
-        consolidation_data_columns = [col for col, checked in self.consolidation_data_columns.items() if checked]
+        send_mode = False
+        if hasattr(self, 'send_together_check'):
+            send_mode = self.send_together_check.isChecked()
         
         return EmailConfig(
             email_columns=email_columns,
-            multiple_emails_per_row=multiple_emails,
-            send_multiple_together=self.send_multiple_together,
+            name_columns=name_columns,
+            recipient_mode=self.recipient_mode,
             separator_chars=separators,
-            email_template=template,
+            send_multiple_together=send_mode,
             consolidate_rows_by_recipient=self.consolidate_enabled,
             consolidation_recipient_column=self.consolidation_recipient_column,
-            consolidation_data_columns=consolidation_data_columns
+            consolidation_data_columns=[],
+            consolidation_combination_mode=self.consolidation_combination_mode,
+            cell_combination_mode=self.cell_combination_mode,
+            custom_combined_column_names=custom_names if custom_names else None
         )
-    
-    def extract_emails_preview(self) -> List[str]:
-        """Extract and validate emails using current configuration"""
-        emails = []
-        pattern = re.compile(self.config.email_template)
-        
-        for row in self.data[:10]:  # Preview only first 10 rows
-            for col_idx in self.config.email_columns:
-                if col_idx < len(row):
-                    cell_content = str(row[col_idx])
-                    
-                    if self.config.multiple_emails_per_row and self.config.separator_chars:
-                        # Split by separators
-                        parts = [cell_content]
-                        for separator in self.config.separator_chars:
-                            new_parts = []
-                            for part in parts:
-                                new_parts.extend(part.split(separator))
-                            parts = new_parts
-                        
-                        # Validate each part
-                        for part in parts:
-                            email = part.strip()
-                            if email and pattern.match(email):
-                                emails.append(email)
-                    else:
-                        # Single email per row
-                        email = cell_content.strip()
-                        if email and pattern.match(email):
-                            emails.append(email)
-        
-        return emails
     
     def go_to_next_step(self):
         """Navigate to next step"""
         if self.current_step == 1:
-            if not any(cb.isChecked() for cb in self.column_checkboxes.values()):
-                QMessageBox.warning(self, "No Selection", "Please select at least one column containing emails.")
-                return
-            # Save state before moving to next step
-            self.selected_email_columns = {col: cb.isChecked() for col, cb in self.column_checkboxes.items()}
-            self.show_step_2()
+            pass  # Handled by select_recipient_mode
         elif self.current_step == 2:
-            # Save state before moving to next step
-            if self.multiple_emails_checkbox:
-                self.multiple_emails_enabled = self.multiple_emails_checkbox.isChecked()
+            if not any(cb.isChecked() for cb in self.column_checkboxes.values()):
+                QMessageBox.warning(self, "No Selection", "Please select at least one email column.")
+                return
+            self.selected_email_columns = {col: cb.isChecked() for col, cb in self.column_checkboxes.items()}
             self.show_step_3()
         elif self.current_step == 3:
-            # Save state from separators if multiple emails enabled
-            if self.multiple_emails_enabled and self.separator_checkboxes:
+            self.selected_name_columns = {col: cb.isChecked() for col, cb in self.name_checkboxes.items()}
+            self.show_step_4()
+        elif self.current_step == 4:
+            if self.separator_checkboxes:
                 self.selected_separators = {sep: cb.isChecked() for sep, cb in self.separator_checkboxes.items()}
                 if not any(cb.isChecked() for cb in self.separator_checkboxes.values()):
                     QMessageBox.warning(self, "No Selection", "Please select at least one separator.")
                     return
-            # Always save template
-            if self.template_input:
-                self.template_text = self.template_input.text()
-            self.show_step_4()
-        elif self.current_step == 4:
             self.show_step_5()
         elif self.current_step == 5:
-            # Apply configuration and close
+            # This handles both cell combination selection and consolidation enable/disable
+            # Check if we have custom_name_inputs (means we're in custom_names mode for step 5B)
+            if hasattr(self, 'custom_name_inputs'):
+                # We're coming from step 5B (custom names), go to consolidation
+                self.custom_combined_names = {col: inp.text() for col, inp in self.custom_name_inputs.items()}
+                self.show_step_5_5()
+            elif hasattr(self, 'consolidation_column_radios'):
+                # We're coming from consolidation enable/disable (step 5.5)
+                self.show_step_6()
+            else:
+                # Shouldn't reach here, but default to consolidation step
+                self.show_step_5_5()
+        elif self.current_step == 6:
+            # Save consolidation column if selected
+            if hasattr(self, 'consolidation_column_radios'):
+                for col_idx, radio in self.consolidation_column_radios.items():
+                    if radio.isChecked():
+                        self.consolidation_recipient_column = col_idx
+                        break
+            self.show_step_7()
+        elif self.current_step == 7:
+            self.show_step_8()
+        elif self.current_step == 8:
             self.config = self.build_configuration()
             self.configuration_complete.emit(self.config)
             self.accept()
@@ -789,24 +854,28 @@ Template:             Email regex validation active
         elif self.current_step == 4:
             self.show_step_3()
         elif self.current_step == 5:
-            self.show_step_4()
-    
-    def on_template_mode_changed(self, checkbox):
-        """Handle template mode change"""
-        if checkbox.isChecked():
-            self.template_input.setText(r"^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}$")
-            self.template_input.setReadOnly(True)
-        else:
-            self.template_input.setReadOnly(False)
-    
-    def on_step2_yes_clicked(self, yes_btn, no_btn):
-        """Handle YES button click on Step 2"""
-        self.multiple_emails_enabled = True
-        yes_btn.setStyleSheet(get_button_style('success'))
-        no_btn.setStyleSheet(get_button_style('default'))
-    
-    def on_step2_no_clicked(self, yes_btn, no_btn):
-        """Handle NO button click on Step 2"""
-        self.multiple_emails_enabled = False
-        no_btn.setStyleSheet(get_button_style('success'))
-        yes_btn.setStyleSheet(get_button_style('default'))
+            # Could be coming from either step 5 (cell combination) or step 5B (custom names) or step 5.5 (consolidation)
+            # Check which step we're actually in based on what widgets exist
+            if hasattr(self, 'consolidation_column_radios') or hasattr(self, 'consolidation_radios_for_consolidation_enable'):
+                # We're in consolidation steps, go back to cell combination
+                self.show_step_5()
+            elif self.recipient_mode == "same_in_different_columns":
+                self.show_step_3()
+            else:
+                self.show_step_4()
+        elif self.current_step == 6:
+            # Coming from consolidation column selection
+            # Check if we came from custom names
+            if hasattr(self, 'custom_name_inputs'):
+                self.show_step_5_custom_names()
+            else:
+                self.show_step_5_5()
+        elif self.current_step == 7:
+            self.show_step_6()
+        elif self.current_step == 8:
+            # Could be coming from step 7 (consolidation data combination) or from step 5.5 (skipped consolidation)
+            if self.consolidate_enabled:
+                self.show_step_7()
+            else:
+                self.show_step_5_5()
+        
