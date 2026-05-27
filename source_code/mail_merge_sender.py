@@ -6,13 +6,14 @@ from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLabel, QPushButton, QFileDialog, QLineEdit, QMessageBox, QTextEdit, 
     QGroupBox, QTableWidget, QTableWidgetItem, QTabWidget, QComboBox, QProgressBar,
-    QScrollArea, QCheckBox, QDialog, QListWidget, QListWidgetItem, QSpinBox
+    QScrollArea, QCheckBox, QDialog, QListWidget, QListWidgetItem, QSpinBox, QAbstractItemView
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
 from .theme import var_theme, get_button_style, get_table_style
 from .email_config_wizard import EmailConfigurationWizard, EmailConfig
 from .drag_drop_attachments_window import DragDropAttachmentsWindow
+from .attachment_recipient_match_window import RecipientMatchedAttachmentWindow
 from assets.import_service import ImportService
 from assets.email_service import EmailService
 from assets.data_manager import PlaceholderManager
@@ -38,6 +39,7 @@ class UniversalSender(QMainWindow):
         y = (desktop_geometry.height() - window_height) // 2 + desktop_geometry.y()
         self.setGeometry(x, y, window_width, window_height)  
         self.imported_data = []
+        self.original_imported_data = []
         self.processed_data = []
         self.filtered_data = []
         self.selected_rows = set()  
@@ -54,6 +56,9 @@ class UniversalSender(QMainWindow):
         self.email_accounts = []
         self.template_formatting = {}  
         self.email_config = None  # Email configuration from wizard
+        self.recipient_mapped_attachments = []
+        self.recipient_attachment_mapping = {}
+        self._compose_selection_snapshot = set()
         self.bullet_styles = {
             "Dash": "-",
             "Bullet": "•",
@@ -175,6 +180,8 @@ class UniversalSender(QMainWindow):
         self.data_table.setAlternatingRowColors(True)
         self.data_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.data_table.setSelectionMode(QTableWidget.MultiSelection)
+        self.data_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.data_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         preview_layout.addWidget(self.data_table)
         self.selection_info_label = QLabel("No data loaded")
         self.selection_info_label.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 9pt; padding: 5px;")
@@ -215,14 +222,16 @@ class UniversalSender(QMainWindow):
         attachments_layout.setSpacing(4)
         attachments_buttons_layout = QHBoxLayout()
         attachments_buttons_layout.setSpacing(5)  
-        add_attachment_btn = QPushButton("Add File")
+        add_attachment_btn = QPushButton("Same Attachment")
         add_attachment_btn.setStyleSheet(get_button_style('primary'))
         add_attachment_btn.setMinimumSize(70, 26)
-        add_attachment_btn.clicked.connect(self.add_attachment)
-        drag_drop_attachment_btn = QPushButton("Drag & Drop")
-        drag_drop_attachment_btn.setStyleSheet(get_button_style('primary'))
-        drag_drop_attachment_btn.setMinimumSize(80, 26)
-        drag_drop_attachment_btn.clicked.connect(self.open_drag_drop_window)
+        add_attachment_btn.setToolTip("Select one or more attachments that will be sent with all emails")
+        add_attachment_btn.clicked.connect(self.add_shared_attachments)
+        match_attachment_btn = QPushButton("Separate Attachment")
+        match_attachment_btn.setStyleSheet(get_button_style('primary'))
+        match_attachment_btn.setMinimumSize(110, 26)
+        match_attachment_btn.setToolTip("Select one or more attachments, that will be sent to separate recipients.")
+        match_attachment_btn.clicked.connect(self.open_recipient_match_window)
         remove_attachment_btn = QPushButton("Remove")
         remove_attachment_btn.setStyleSheet(get_button_style('danger'))
         remove_attachment_btn.setMinimumSize(70, 26)
@@ -232,21 +241,26 @@ class UniversalSender(QMainWindow):
         clear_attachments_btn.setMinimumSize(70, 26)
         clear_attachments_btn.clicked.connect(self.clear_attachments)
         attachments_buttons_layout.addWidget(add_attachment_btn)
-        attachments_buttons_layout.addWidget(drag_drop_attachment_btn)
+        attachments_buttons_layout.addWidget(match_attachment_btn)
         attachments_buttons_layout.addWidget(remove_attachment_btn)
         attachments_buttons_layout.addWidget(clear_attachments_btn)
         attachments_buttons_layout.addStretch()
         attachments_layout.addLayout(attachments_buttons_layout)
         self.attachments_table = QTableWidget()
-        self.attachments_table.setColumnCount(2)
-        self.attachments_table.setHorizontalHeaderLabels(["File", "Size"])
-        self.attachments_table.setMinimumHeight(100)
-        self.attachments_table.setMaximumHeight(130)
+        self.attachments_table.setColumnCount(5)
+        self.attachments_table.setHorizontalHeaderLabels(["File", "Size", "Type", "Recipient", "Status"])
+        self.attachments_table.setMinimumHeight(120)
+        self.attachments_table.setMaximumHeight(180)
         self.attachments_table.setStyleSheet(get_table_style())
         self.attachments_table.setAlternatingRowColors(True)
         self.attachments_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.attachments_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.attachments_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.attachments_table.horizontalHeader().setStretchLastSection(True)
         self.attachments_table.setColumnWidth(0, 250)
+        self.attachments_table.setColumnWidth(1, 90)
+        self.attachments_table.setColumnWidth(2, 150)
+        self.attachments_table.setColumnWidth(3, 320)
         self.attachments_table.verticalHeader().setVisible(False)
         attachments_layout.addWidget(self.attachments_table)
         self.attachment_info_label = QLabel("No files")
@@ -255,6 +269,10 @@ class UniversalSender(QMainWindow):
         attachments_group.setLayout(attachments_layout)
         top_section_layout.addWidget(attachments_group, 1)  
         layout.addLayout(top_section_layout)
+        self.attachment_notice_label = QLabel("")
+        self.attachment_notice_label.setWordWrap(True)
+        self.attachment_notice_label.setStyleSheet(f"color: {var_theme.colors['warning']}; font-size: 8pt; padding: 2px;")
+        layout.addWidget(self.attachment_notice_label)
         template_group = QGroupBox("Email Template")
         template_layout = QVBoxLayout()
         template_layout.setContentsMargins(12, 12, 12, 12)
@@ -358,6 +376,8 @@ class UniversalSender(QMainWindow):
         self.mapping_table.setMaximumHeight(350)  
         self.mapping_table.setStyleSheet(get_table_style())
         self.mapping_table.setAlternatingRowColors(True)
+        self.mapping_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.mapping_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.mapping_table.horizontalHeader().setStretchLastSection(False)
         self.mapping_table.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         mapping_layout.addWidget(self.mapping_table)
@@ -1535,6 +1555,10 @@ class UniversalSender(QMainWindow):
             if hasattr(self, 'format_placeholder_combo'):
                 self.refresh_formatting_placeholder_options()
             self.update_format_preview()  
+        if index == 1 and hasattr(self, 'attachments_table'):
+            self.update_attachments_display()
+            self.update_attachment_assignment_notice()
+            self._compose_selection_snapshot = set(self.selected_rows)
     def browse_file(self):
         file_filter = "All Files (*.*);;CSV Files (*.csv);;Excel Files (*.xlsx)"
         file_path, _ = QFileDialog.getOpenFileName(
@@ -1551,7 +1575,9 @@ class UniversalSender(QMainWindow):
         try:
             result = FileImporter.import_file(file_path)
             if result['success']:
-                self.imported_data = result['data']
+                self.original_imported_data = [list(row) for row in result['data']]
+                self.imported_data = [row.copy() for row in self.original_imported_data]
+                self.processed_data = [row.copy() for row in self.original_imported_data]
                 self.headers = result['headers']
                 if hasattr(self, 'format_placeholder_combo'):
                     self.refresh_formatting_placeholder_options()
@@ -1572,7 +1598,8 @@ class UniversalSender(QMainWindow):
     def show_email_config_wizard(self):
         """Show the email configuration wizard dialog"""
         try:
-            wizard = EmailConfigurationWizard(self.headers, self.imported_data, parent=self)
+            source_data = self.original_imported_data if self.original_imported_data else self.imported_data
+            wizard = EmailConfigurationWizard(self.headers, source_data, parent=self)
             wizard.configuration_complete.connect(self.on_email_config_complete)
             wizard.exec_()
         except Exception as e:
@@ -1583,10 +1610,19 @@ class UniversalSender(QMainWindow):
         """Handle email configuration completion"""
         self.email_config = config
         logger.info(f"Email configuration saved: columns={config.email_columns}, recipient_mode={config.recipient_mode}")
+
+        source_data = self.original_imported_data if self.original_imported_data else self.imported_data
+        self.imported_data = [list(row) for row in source_data]
+        self.processed_data = [row.copy() for row in self.imported_data]
+        self.filtered_data = self.imported_data.copy()
         
         # Apply row consolidation if enabled
         if config.consolidate_rows_by_recipient:
-            self.consolidate_rows_by_recipient(config)
+            self.consolidate_rows_by_recipient(config, source_data=source_data)
+        else:
+            self.update_table_display()
+            if hasattr(self, 'format_preview'):
+                self.update_format_preview()
         
         # Update table to highlight selected email columns
         self.highlight_email_columns()
@@ -1604,55 +1640,69 @@ The program will now use these settings for extracting email addresses."""
         
         QMessageBox.information(self, "Configuration Complete", msg)
     
-    def consolidate_rows_by_recipient(self, config: EmailConfig):
+    def consolidate_rows_by_recipient(self, config: EmailConfig, source_data=None):
         """Consolidate multiple rows with the same recipient into single rows"""
         if config.consolidation_recipient_column is None or config.consolidation_recipient_column >= len(self.headers):
             logger.warning("Invalid recipient column for consolidation")
             return
         
-        if not config.consolidation_data_columns:
-            logger.warning("No data columns selected for consolidation")
-            return
-        
         try:
+            working_data = source_data if source_data is not None else (self.original_imported_data if self.original_imported_data else self.imported_data)
             recipient_col_idx = config.consolidation_recipient_column
-            data_col_indices = config.consolidation_data_columns
+            name_col_idx = config.consolidation_name_column
+            key_columns = {recipient_col_idx}
+            if name_col_idx is not None and name_col_idx < len(self.headers):
+                key_columns.add(name_col_idx)
+            data_columns = [col_idx for col_idx in range(len(self.headers)) if col_idx not in key_columns]
             
-            # Dictionary to group rows by recipient
-            consolidated_data = {}  # recipient -> list of rows
+            # Dictionary to group rows by recipient key
+            consolidated_data = {}
             
-            # Group rows by recipient
-            for row in self.imported_data:
-                if recipient_col_idx < len(row):
-                    recipient = row[recipient_col_idx]
-                    if recipient not in consolidated_data:
-                        consolidated_data[recipient] = {
-                            'first_row': row.copy(),
-                            'data_values': {col_idx: [] for col_idx in data_col_indices}
-                        }
-                    
-                    # Collect data from consolidation columns
-                    for col_idx in data_col_indices:
-                        if col_idx < len(row) and col_idx != recipient_col_idx:
-                            value = str(row[col_idx]).strip()
-                            if value and value not in consolidated_data[recipient]['data_values'][col_idx]:
-                                consolidated_data[recipient]['data_values'][col_idx].append(value)
+            def normalize_value(value):
+                return str(value).strip()
+
+            def build_key(row):
+                email_value = normalize_value(row[recipient_col_idx]) if recipient_col_idx < len(row) else ""
+                name_value = normalize_value(row[name_col_idx]) if name_col_idx is not None and name_col_idx < len(row) else ""
+                return (email_value.lower(), name_value.lower()) if name_col_idx is not None else (email_value.lower(),)
+
+            # Group rows by recipient key
+            for row in working_data:
+                key = build_key(row)
+                email_value = key[0]
+                if not email_value:
+                    continue
+
+                if key not in consolidated_data:
+                    consolidated_data[key] = {
+                        'first_row': row.copy(),
+                        'values_by_column': {col_idx: [] for col_idx in data_columns}
+                    }
+
+                for col_idx in data_columns:
+                    if col_idx >= len(row):
+                        continue
+
+                    value = normalize_value(row[col_idx])
+                    if value and value not in consolidated_data[key]['values_by_column'][col_idx]:
+                        consolidated_data[key]['values_by_column'][col_idx].append(value)
             
             # Build new consolidated data list
             new_data = []
-            for recipient, data in consolidated_data.items():
+            for recipient_key, data in consolidated_data.items():
                 new_row = data['first_row'].copy()
                 
-                # Replace consolidation columns with combined values
-                for col_idx in data_col_indices:
-                    combined_value = "; ".join(data['data_values'][col_idx])
+                # Keep the recipient key columns unchanged and merge each remaining
+                # column back into its original position.
+                for col_idx, values in data['values_by_column'].items():
                     if col_idx < len(new_row):
-                        new_row[col_idx] = combined_value
+                        new_row[col_idx] = "; ".join(values)
                 
                 new_data.append(new_row)
             
-            # Update imported data with consolidated data
+            # Update working data with consolidated data
             self.imported_data = new_data
+            self.processed_data = [row.copy() for row in new_data]
             self.filtered_data = self.imported_data.copy()
             
             # Refresh the table display
@@ -1763,6 +1813,10 @@ The program will now use these settings for extracting email addresses."""
         self.selection_info_label.setText(info_text)
         # Instantly update send summary when selection changes
         self.update_send_summary()
+        if hasattr(self, 'attachments_table'):
+            self.update_attachments_display()
+        if hasattr(self, 'attachment_notice_label'):
+            self.update_attachment_assignment_notice()
     def filter_table_data(self):
         if not self.imported_data:
             return
@@ -2310,6 +2364,7 @@ The program will now use these settings for extracting email addresses."""
                         for header_index, header in enumerate(self.headers):
                             if header_index < len(row_data):
                                 recipient[header] = row_data[header_index]
+                        recipient['_attachments'] = self.get_shared_and_separate_attachments_for_row(row_index)
                         
                         # Handle multiple emails based on configuration
                         if self.email_config and self.email_config.email_columns:
@@ -2442,7 +2497,8 @@ The program will now use these settings for extracting email addresses."""
         except Exception as e:
             logger.error(f"Critical error in send_emails: {e}")
             QMessageBox.critical(self, "Critical Error", f"A critical error occurred: {str(e)}")
-    def add_attachment(self):
+    def add_shared_attachments(self):
+        """Add shared attachments that will be sent to every recipient."""
         file_paths, _ = QFileDialog.getOpenFileNames(
             self, "Select Attachments", "", 
             "All Files (*);;Documents (*.pdf *.doc *.docx);;Images (*.jpg *.jpeg *.png *.gif);;Excel Files (*.xlsx *.xls)"
@@ -2452,49 +2508,166 @@ The program will now use these settings for extracting email addresses."""
                 if file_path not in self.attachments:
                     self.attachments.append(file_path)
             self.update_attachments_display()
+
+    def add_attachment(self):
+        """Backward-compatible wrapper for the shared attachment picker."""
+        self.add_shared_attachments()
     def remove_attachment(self):
         current_row = self.attachments_table.currentRow()
-        if current_row >= 0 and current_row < len(self.attachments):
-            self.attachments.pop(current_row)
-            self.update_attachments_display()
+        if current_row < 0:
+            return
+
+        item = self.attachments_table.item(current_row, 0)
+        row_info = item.data(Qt.UserRole) if item else None
+        if not isinstance(row_info, dict):
+            return
+
+        file_path = row_info.get('file_path')
+        mode = row_info.get('mode')
+
+        if mode == 'same' and file_path in self.attachments:
+            self.attachments.remove(file_path)
+        elif mode == 'separate' and file_path in self.recipient_attachment_mapping:
+            del self.recipient_attachment_mapping[file_path]
+            if file_path in self.recipient_mapped_attachments:
+                self.recipient_mapped_attachments.remove(file_path)
+
+        self.update_attachments_display()
+        self.update_attachment_assignment_notice()
     def clear_attachments(self):
         self.attachments.clear()
+        self.recipient_attachment_mapping.clear()
+        self.recipient_mapped_attachments.clear()
         self.update_attachments_display()
+        self.update_attachment_assignment_notice()
     def update_attachments_display(self):
-        self.attachments_table.setRowCount(len(self.attachments))
-        for row, attachment in enumerate(self.attachments):
-            filename = os.path.basename(attachment)
+        rows = []
+
+        for attachment in self.attachments:
+            rows.append({
+                'mode': 'same',
+                'file_path': attachment,
+                'size_text': self.get_attachment_size_text(attachment),
+                'recipient_index': None,
+                'recipient_label': 'All e-mails',
+                'status': 'Sent to all selected recipients',
+            })
+
+        for attachment_path, mapping_data in self.recipient_attachment_mapping.items():
+            recipient_index = mapping_data.get('recipient_index')
+            rows.append({
+                'mode': 'separate',
+                'file_path': attachment_path,
+                'size_text': self.get_attachment_size_text(attachment_path),
+                'recipient_index': recipient_index,
+                'recipient_label': str(mapping_data.get('recipient_label', 'No one')),
+                'status': 'Active' if recipient_index is not None and recipient_index in self.selected_rows else 'Recipient not selected',
+            })
+
+        self.attachments_table.setRowCount(len(rows))
+        active_count = 0
+
+        for row, row_info in enumerate(rows):
+            filename = os.path.basename(row_info['file_path'])
+
             filename_item = QTableWidgetItem(filename)
             filename_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            filename_item.setData(Qt.UserRole, row_info)
             self.attachments_table.setItem(row, 0, filename_item)
-            try:
-                size_bytes = os.path.getsize(attachment)
-                if size_bytes < 1024:
-                    size_text = f"{size_bytes} B"
-                elif size_bytes < 1024*1024:
-                    size_text = f"{size_bytes/1024:.1f} KB"
-                else:
-                    size_text = f"{size_bytes/(1024*1024):.1f} MB"
-            except OSError:
-                size_text = "Unknown"
-            size_item = QTableWidgetItem(size_text)
+
+            size_item = QTableWidgetItem(row_info['size_text'])
             size_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
             self.attachments_table.setItem(row, 1, size_item)
-        if self.attachments:
+
+            mode_item = QTableWidgetItem('Same Attachment' if row_info['mode'] == 'same' else 'Separate Attachment')
+            mode_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            self.attachments_table.setItem(row, 2, mode_item)
+
+            recipient_combo = QComboBox()
+            if row_info['mode'] == 'same':
+                recipient_combo.addItem('All e-mails', None)
+                recipient_combo.setEnabled(False)
+                active_count += 1
+            else:
+                recipient_combo.addItem('No one', None)
+                for recipient_index, recipient_row in enumerate(self.imported_data):
+                    recipient_combo.addItem(self.get_recipient_display_text(recipient_row, recipient_index), recipient_index)
+                current_index = row_info.get('recipient_index')
+                if current_index is not None:
+                    combo_index = recipient_combo.findData(current_index)
+                    if combo_index >= 0:
+                        recipient_combo.setCurrentIndex(combo_index)
+                recipient_combo.currentIndexChanged.connect(lambda _index, path=row_info['file_path']: self.on_attachment_recipient_changed(path))
+                if current_index is not None and current_index in self.selected_rows:
+                    active_count += 1
+
+            self.attachments_table.setCellWidget(row, 3, recipient_combo)
+
+            status_item = QTableWidgetItem(row_info['status'])
+            status_item.setFlags(Qt.ItemIsEnabled | Qt.ItemIsSelectable)
+            if row_info['mode'] == 'same' or (row_info.get('recipient_index') is not None and row_info.get('recipient_index') in self.selected_rows):
+                status_item.setForeground(QColor(var_theme.colors['success']))
+            else:
+                status_item.setForeground(QColor(var_theme.colors['warning']))
+            self.attachments_table.setItem(row, 4, status_item)
+
+        if rows:
             total_size = 0
-            for attachment in self.attachments:
+            for row_info in rows:
                 try:
-                    total_size += os.path.getsize(attachment)
+                    total_size += os.path.getsize(row_info['file_path'])
                 except OSError:
                     pass
-            size_mb = total_size / (1024 * 1024)
-            self.attachment_info_label.setText(
-                f"{len(self.attachments)} file(s) ({size_mb:.1f}MB)"
-            )
+            self.attachment_info_label.setText(f"{len(rows)} attachment row(s) | {active_count} active | Total size: {total_size/(1024*1024):.1f}MB")
             self.attachment_info_label.setStyleSheet(f"color: {var_theme.colors['success']}; font-size: 8pt; padding: 2px;")
         else:
             self.attachment_info_label.setText("No files")
             self.attachment_info_label.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 8pt; padding: 2px;")
+
+        self.attachments_table.resizeRowsToContents()
+
+    def get_attachment_size_text(self, attachment_path):
+        try:
+            size_bytes = os.path.getsize(attachment_path)
+            if size_bytes < 1024:
+                return f"{size_bytes} B"
+            if size_bytes < 1024 * 1024:
+                return f"{size_bytes/1024:.1f} KB"
+            return f"{size_bytes/(1024*1024):.1f} MB"
+        except OSError:
+            return "Unknown"
+
+    def on_attachment_recipient_changed(self, attachment_path):
+        row_index = -1
+        row_item = None
+        for idx in range(self.attachments_table.rowCount()):
+            candidate = self.attachments_table.item(idx, 0)
+            data = candidate.data(Qt.UserRole) if candidate else None
+            if isinstance(data, dict) and data.get('file_path') == attachment_path:
+                row_index = idx
+                row_item = candidate
+                break
+
+        if row_index < 0 or row_item is None:
+            return
+
+        row_info = row_item.data(Qt.UserRole)
+        if row_info.get('mode') != 'separate':
+            return
+
+        combo = self.attachments_table.cellWidget(row_index, 3)
+        if combo is None:
+            return
+
+        selected_index = combo.currentData()
+        updated_mapping = self.recipient_attachment_mapping.get(attachment_path, {})
+        updated_mapping['recipient_index'] = selected_index
+        updated_mapping['recipient_label'] = combo.currentText() if selected_index is not None else 'No one'
+        updated_mapping['recipient_row'] = self.imported_data[selected_index] if selected_index is not None and selected_index < len(self.imported_data) else None
+        updated_mapping['match_source'] = 'Manual override' if selected_index is not None else 'No one'
+        self.recipient_attachment_mapping[attachment_path] = updated_mapping
+        self.update_attachments_display()
+        self.update_attachment_assignment_notice()
     
     def open_drag_drop_window(self):
         """Open the drag-and-drop attachments window"""
@@ -2515,6 +2688,134 @@ The program will now use these settings for extracting email addresses."""
                     self.attachments.append(file_path)
             self.update_attachments_display()
             self.statusBar().showMessage(f"Added {len(files)} attachment(s)")
+
+    def open_recipient_match_window(self):
+        """Open the recipient-matching attachment window."""
+        if not self.imported_data or not self.headers:
+            QMessageBox.warning(
+                self,
+                "No Recipient Data",
+                "Please import recipient data before matching attachments."
+            )
+            return
+
+        window = RecipientMatchedAttachmentWindow(
+            attachments=list(self.recipient_attachment_mapping.keys()),
+            recipients_data=self.imported_data,
+            headers=self.headers,
+            parent=self
+        )
+        window.mapping_confirmed.connect(self.on_recipient_match_mapping_confirmed)
+        window.exec_()
+
+    def on_recipient_match_mapping_confirmed(self, mapping):
+        """Store attachment-to-recipient matches from the matching dialog."""
+        self.recipient_attachment_mapping = mapping if mapping else {}
+        self.recipient_mapped_attachments = list(mapping.keys()) if mapping else []
+        self.update_attachments_display()
+        self.update_attachment_assignment_notice()
+        if mapping:
+            self.statusBar().showMessage(f"Matched {len(mapping)} attachment(s) to recipients")
+
+    def update_attachment_assignment_notice(self):
+        """Show a notice when newly selected recipients do not have separate attachments assigned."""
+        if not hasattr(self, 'attachment_notice_label'):
+            return
+
+        if not self.recipient_attachment_mapping or not self._compose_selection_snapshot:
+            self.attachment_notice_label.setText("")
+            return
+
+        newly_selected = set(self.selected_rows) - set(self._compose_selection_snapshot)
+        if not newly_selected:
+            self.attachment_notice_label.setText("")
+            return
+
+        separate_recipient_indices = {
+            data.get('recipient_index')
+            for data in self.recipient_attachment_mapping.values()
+            if data.get('recipient_index') is not None
+        }
+
+        missing_new = [idx for idx in sorted(newly_selected) if idx not in separate_recipient_indices]
+        if not missing_new:
+            self.attachment_notice_label.setText("")
+            return
+
+        names = []
+        for idx in missing_new:
+            if idx < len(self.imported_data):
+                names.append(self.get_recipient_display_text(self.imported_data[idx], idx))
+            else:
+                names.append(f"Row {idx + 1}")
+
+        self.attachment_notice_label.setText(
+            f"Some newly selected recipients do not have separate attachments assigned: {', '.join(names)}. Shared attachments still go to all selected recipients."
+        )
+
+    def get_recipient_display_text(self, recipient_row, row_index=None):
+        """Build a readable recipient label for the attachment table and notices."""
+        if isinstance(recipient_row, dict):
+            name_value = ""
+            email_value = ""
+            for key in ('Name', 'name', 'Full Name', 'full name', 'Recipient', 'recipient'):
+                value = str(recipient_row.get(key, '') or '').strip()
+                if value:
+                    name_value = value
+                    break
+            for key in ('Email', 'email', 'EmailAddress', 'email address', 'E-mail', 'e-mail'):
+                value = str(recipient_row.get(key, '') or '').strip()
+                if value:
+                    email_value = value
+                    break
+            parts = []
+            if name_value:
+                parts.append(name_value)
+            if email_value:
+                parts.append(f"<{email_value}>")
+            if parts:
+                return " ".join(parts)
+
+        if isinstance(recipient_row, (list, tuple)):
+            for idx, header in enumerate(self.headers):
+                if idx < len(recipient_row):
+                    header_name = str(header).strip().lower()
+                    cell_value = str(recipient_row[idx]).strip()
+                    if not cell_value:
+                        continue
+                    if 'email' in header_name:
+                        return cell_value
+                    if any(token in header_name for token in ('name', 'recipient', 'contact')):
+                        return cell_value
+            for value in recipient_row:
+                text = str(value).strip()
+                if text:
+                    return text
+
+        return f"Row {row_index + 1}" if row_index is not None else "Recipient"
+
+    def get_separate_attachments_for_recipient(self, recipient_row_index):
+        """Return attachments mapped to a specific recipient row that is currently selected."""
+        if recipient_row_index not in self.selected_rows:
+            return []
+
+        attachments = []
+        for attachment_path, mapping_data in self.recipient_attachment_mapping.items():
+            if mapping_data.get('recipient_index') == recipient_row_index:
+                attachments.append(attachment_path)
+        return attachments
+
+    def get_shared_and_separate_attachments_for_row(self, recipient_row_index):
+        """Return the attachments that should be sent for a recipient row."""
+        combined = []
+        seen = set()
+        for path in list(self.attachments) + self.get_separate_attachments_for_recipient(recipient_row_index):
+            normalized = os.path.normcase(os.path.abspath(path))
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            combined.append(path)
+        return combined
     
     def closeEvent(self, event):
         """Handle window close event"""

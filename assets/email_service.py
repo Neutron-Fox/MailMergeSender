@@ -749,13 +749,23 @@ class EmailService:
                             logger.warning(f"Could not add inline signature image '{image_path}': {image_err}")
                     
                     # Add attachments
-                    if attachments:
-                        for att_path in attachments:
-                            if os.path.exists(att_path):
-                                try:
-                                    mail_item.Attachments.Add(att_path)
-                                except Exception as att_e:
-                                    logger.warning(f"Could not add attachment {att_path}: {att_e}")
+                    combined_attachments = []
+                    seen_attachment_paths = set()
+                    for att_path in list(attachments or []) + list(recipient_data.get('_attachments', []) or []):
+                        if not att_path:
+                            continue
+                        normalized_path = os.path.normcase(os.path.abspath(str(att_path)))
+                        if normalized_path in seen_attachment_paths:
+                            continue
+                        seen_attachment_paths.add(normalized_path)
+                        combined_attachments.append(str(att_path))
+
+                    for att_path in combined_attachments:
+                        if os.path.exists(att_path):
+                            try:
+                                mail_item.Attachments.Add(att_path)
+                            except Exception as att_e:
+                                logger.warning(f"Could not add attachment {att_path}: {att_e}")
                     
                     # Send - ensure sender identity is still bound right before send
                     EmailService._apply_sender_to_mail_item(mail_item, account_object, sender_email)
