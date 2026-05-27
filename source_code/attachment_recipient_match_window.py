@@ -36,6 +36,7 @@ from PyQt5.QtWidgets import (
     QTableWidgetItem,
     QListWidget,
     QListWidgetItem,
+    QAbstractItemView,
     QVBoxLayout,
 )
 
@@ -102,6 +103,8 @@ class RecipientMatchedAttachmentWindow(QDialog):
         self.files_list = QListWidget()
         self.files_list.setStyleSheet(get_table_style())
         self.files_list.setMinimumHeight(110)
+        self.files_list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.files_list.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         file_layout.addWidget(self.files_list)
 
         self.files_summary_label = QLabel("Use Browse Files or drag and drop attachments here.")
@@ -165,6 +168,8 @@ class RecipientMatchedAttachmentWindow(QDialog):
         self.match_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.match_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.match_table.verticalHeader().setVisible(False)
+        self.match_table.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
+        self.match_table.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.match_table.horizontalHeader().setStretchLastSection(True)
         self.match_table.setColumnWidth(0, 300)
         self.match_table.setColumnWidth(1, 250)
