@@ -56,16 +56,18 @@ class RecipientMatchedAttachmentWindow(QDialog):
         self.match_rows = []
 
         self.setWindowTitle("Match Attachments to Recipients")
-        self.setMinimumSize(1000, 650)
-        self.setGeometry(120, 120, 1100, 700)
 
         self.setup_ui()
         self.refresh_table()
+        self.adjustSize()
+        self.setMinimumSize(self.size())
+        self.resize(self.size())
 
     def setup_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(15, 15, 15, 15)
         layout.setSpacing(10)
+        layout.setSizeConstraint(QVBoxLayout.SetMinimumSize)
 
         title_label = QLabel("Match Attachments to Recipient Column")
         title_label.setFont(var_theme.get_font(12, 'bold'))
@@ -97,12 +99,19 @@ class RecipientMatchedAttachmentWindow(QDialog):
         clear_btn.clicked.connect(self.clear_attachments)
         file_buttons_layout.addWidget(clear_btn)
 
+        delete_btn = QPushButton("Delete Selected")
+        delete_btn.setStyleSheet(get_button_style('danger'))
+        delete_btn.clicked.connect(self.delete_selected_attachments)
+        file_buttons_layout.addWidget(delete_btn)
+
         file_buttons_layout.addStretch()
         file_layout.addLayout(file_buttons_layout)
 
         self.files_list = QListWidget()
         self.files_list.setStyleSheet(get_table_style())
-        self.files_list.setMinimumHeight(110)
+        self.files_list.setMinimumHeight(70)
+        self.files_list.setMaximumHeight(95)
+        self.files_list.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self.files_list.setVerticalScrollMode(QAbstractItemView.ScrollPerPixel)
         self.files_list.setHorizontalScrollMode(QAbstractItemView.ScrollPerPixel)
         file_layout.addWidget(self.files_list)
@@ -111,7 +120,7 @@ class RecipientMatchedAttachmentWindow(QDialog):
         self.files_summary_label.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 8pt;")
         file_layout.addWidget(self.files_summary_label)
 
-        layout.addWidget(file_group)
+        layout.addWidget(file_group, 0)
 
         controls_group = QGroupBox("Matching Controls")
         controls_layout = QHBoxLayout(controls_group)
@@ -143,7 +152,7 @@ class RecipientMatchedAttachmentWindow(QDialog):
         controls_layout.addWidget(auto_match_btn)
 
         controls_layout.addStretch()
-        layout.addWidget(controls_group)
+        layout.addWidget(controls_group, 0)
 
         self.summary_label = QLabel("Add attachment files with Browse Files or drag and drop, then choose a column to start matching.")
         self.summary_label.setStyleSheet(f"color: {var_theme.colors['text_muted']}; font-size: 9pt;")
@@ -174,7 +183,8 @@ class RecipientMatchedAttachmentWindow(QDialog):
         self.match_table.setColumnWidth(0, 300)
         self.match_table.setColumnWidth(1, 250)
         self.match_table.setColumnWidth(2, 300)
-        layout.addWidget(self.match_table, 1)
+        self.match_table.setMinimumHeight(430)
+        layout.addWidget(self.match_table, 2)
 
         buttons_layout = QHBoxLayout()
         buttons_layout.addStretch()
@@ -233,8 +243,29 @@ class RecipientMatchedAttachmentWindow(QDialog):
         else:
             self.files_summary_label.setText("No attachment files added yet.")
 
+        self.adjustSize()
+
     def clear_attachments(self):
         self.attachments.clear()
+        self.match_rows.clear()
+        self.refresh_attachment_list()
+        self.refresh_table()
+
+    def delete_selected_attachments(self):
+        selected_items = self.files_list.selectedItems()
+        if not selected_items:
+            QMessageBox.information(self, "No Selection", "Select one or more attachments to delete.")
+            return
+
+        selected_paths = {
+            item.data(Qt.UserRole)
+            for item in selected_items
+            if item.data(Qt.UserRole)
+        }
+        if not selected_paths:
+            return
+
+        self.attachments = [path for path in self.attachments if path not in selected_paths]
         self.match_rows.clear()
         self.refresh_attachment_list()
         self.refresh_table()
@@ -389,6 +420,7 @@ class RecipientMatchedAttachmentWindow(QDialog):
 
         if not self.attachments:
             self.summary_label.setText("Use Browse Files or drag and drop to add attachments, then choose a column to start matching.")
+            self.adjustSize()
             return
 
         if selected_column_index is None:
@@ -434,6 +466,7 @@ class RecipientMatchedAttachmentWindow(QDialog):
             self.match_table.setItem(row_index, 3, match_type_item)
 
         self.match_table.resizeRowsToContents()
+        self.adjustSize()
 
     def on_override_changed(self, row_index):
         if row_index >= len(self.match_rows):
